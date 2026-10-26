@@ -12,7 +12,7 @@
     <header class="header">
       <div class="logo-area">
         <span class="logo-text">치지직 클린</span>
-        <span class="version" id="versionText">v2.0.6</span>
+        <span class="version" id="versionText">v2.0.7</span>
       </div>
       <div class="status-badge active">
         <span class="status-dot"></span>
@@ -41,6 +41,19 @@
           <input type="checkbox" id="lowLatencyMode" checked>
           <span class="slider"></span>
         </label>
+      </div>
+
+      <div class="item sub-item" id="targetLatencyArea">
+        <div class="item-info">
+          <div class="sub-header">
+            <span class="title">목표 지연시간 조절</span>
+            <span class="badge-value" id="targetLatencyValue">2.0초</span>
+          </div>
+          <span class="desc" id="targetLatencyDesc">권장: 2.0초 (버퍼링 방지 및 실시간 소통 균형)</span>
+        </div>
+        <div class="range-container">
+          <input type="range" id="targetLatency" min="1.0" max="5.0" step="0.5" value="2.0">
+        </div>
       </div>
 
       <div class="item">

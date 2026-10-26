@@ -93,6 +93,7 @@
   const CLEAN_SETTINGS = {
     gridBypassEnabled: true,
     lowLatencyMode: true,
+    targetLatency: 2.0,
     chatLatencyDisplay: true,
     autoAdSkip: true,
     autoDismissPopup: true,
@@ -2467,7 +2468,7 @@
       } catch (e) {}
     };
 
-    // 실시간 버퍼 지연 추적 및 복구 (Live Edge Catch-up)
+    // 실시간 버퍼 지연 추적 및 복구 (Smart Live Sync & Buffer-aware Chaser)
     const traceLiveLatency = () => {
       const isLive = /^\/live\/[a-f0-9]{32}(?:\/|$)/i.test(root.location?.pathname ?? "");
       if (!isLive) return;
@@ -2480,19 +2481,42 @@
 
         if (video.seekable && video.seekable.length > 0) {
           const liveEnd = video.seekable.end(video.seekable.length - 1);
-          const latency = liveEnd - video.currentTime;
+          const latency = Math.max(0, liveEnd - video.currentTime);
+
+          // 전방 버퍼(Forward Buffer) 길이 계산
+          let forwardBuffer = 0;
+          if (video.buffered && video.buffered.length > 0) {
+            for (let i = 0; i < video.buffered.length; i++) {
+              if (video.currentTime >= video.buffered.start(i) && video.currentTime <= video.buffered.end(i)) {
+                forwardBuffer = video.buffered.end(i) - video.currentTime;
+                break;
+              }
+            }
+          }
 
           if (CLEAN_SETTINGS.lowLatencyMode) {
-            // 1) 지연 12초 이상 크게 누적 시: 즉시 최신 라이브 엣지 근처로 점프
-            if (latency > 12.0) {
-              video.currentTime = Math.max(0, liveEnd - 1.2);
+            const target = typeof CLEAN_SETTINGS.targetLatency === "number" ? CLEAN_SETTINGS.targetLatency : 2.0;
+            const diff = latency - target;
+
+            // 1) 지연이 10초 이상 크게 누적된 경우 (버퍼링/일시정지 복구 후):
+            // 무작정 끝으로 가지 않고 사용자가 지정한 목표 지연시간 위치로 점프!
+            if (diff > 10.0) {
+              video.currentTime = Math.max(0, liveEnd - target);
             }
-            // 2) 지연 2.8초 이상 누적 시: 1.1배속으로 재생하여 자연스럽게 실시간 추적
-            else if (latency > 2.8) {
-              if (video.playbackRate !== 1.1) video.playbackRate = 1.1;
+            // 2) 버퍼가 너무 적으면(1.0초 미만) 가속 시 버퍼링이 발생하므로 즉시 1.0배속으로 버퍼 충전!
+            else if (forwardBuffer < 1.0) {
+              if (video.playbackRate > 1.0) video.playbackRate = 1.0;
             }
-            // 3) 지연 1.5초 이내 도달 시: 정상 1.0배속 유지
-            else if (latency <= 1.5) {
+            // 3) 목표 지연시간보다 0.6초 이상 뒤처지고 버퍼가 1.2초 이상 충분할 때만 가속!
+            else if (diff > 0.6 && forwardBuffer >= 1.2) {
+              if (video.playbackRate !== 1.08) video.playbackRate = 1.08;
+            }
+            // 4) 너무 바짝 붙어서(목표치보다 0.4초 이상 앞섬) 버퍼 고갈 위험이 있을 때는 살짝 감속하여 버퍼 확보
+            else if (diff < -0.4 && forwardBuffer < 1.5) {
+              if (video.playbackRate !== 0.98) video.playbackRate = 0.98;
+            }
+            // 5) 목표 오차 범위 내 도달 시 정상 1.0배속 유지
+            else {
               if (video.playbackRate !== 1.0) video.playbackRate = 1.0;
             }
           } else {
