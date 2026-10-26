@@ -1,14 +1,38 @@
 (() => {
-  const injectScript = (filePath) => {
+  const syncSettingsToPage = (settings) => {
+    if (!settings) return;
     try {
-      const script = document.createElement("script");
-      script.src = chrome.runtime.getURL(filePath);
-      script.async = false;
-      (document.head || document.documentElement).appendChild(script);
-      script.onload = () => script.remove();
+      window.postMessage(
+        {
+          source: "CHZZK_CLEAN_EXT",
+          type: "SETTINGS_UPDATED",
+          settings
+        },
+        "*"
+      );
+      if (document.documentElement) {
+        document.documentElement.setAttribute(
+          "data-chzzk-clean-settings",
+          JSON.stringify(settings)
+        );
+      }
     } catch (e) {
-      console.error("[ChzzkClean] 스크립트 주입 실패:", e);
+      console.warn("[ChzzkClean] 설정 동기화 중 오류:", e);
     }
   };
-  injectScript("injected.js");
+  chrome.storage.local.get(["settings"], (res) => {
+    if (res.settings) {
+      syncSettingsToPage(res.settings);
+    }
+  });
+  chrome.storage.onChanged.addListener((changes, areaName) => {
+    if (areaName === "local" && changes.settings?.newValue) {
+      syncSettingsToPage(changes.settings.newValue);
+    }
+  });
+  chrome.runtime.onMessage.addListener((message) => {
+    if (message?.source === "CHZZK_CLEAN_EXT" && message?.type === "SETTINGS_UPDATED") {
+      syncSettingsToPage(message.settings);
+    }
+  });
 })();

@@ -39,15 +39,39 @@ true&&(function polyfill() {
 }());
 
 document.addEventListener("DOMContentLoaded", () => {
+  const versionText = document.getElementById("versionText");
   const gridBypassInput = document.getElementById("gridBypass");
   const autoAdSkipInput = document.getElementById("autoAdSkip");
   const autoDismissPopupInput = document.getElementById("autoDismissPopup");
+  try {
+    const manifest = chrome.runtime.getManifest();
+    if (versionText && manifest?.version) {
+      versionText.textContent = `v${manifest.version}`;
+    }
+  } catch (e) {
+    console.warn("[ChzzkClean] 매니페스트 버전 로드 실패:", e);
+  }
   chrome.storage.local.get(["settings"], (res) => {
     const settings = { ...DEFAULT_SETTINGS, ...res.settings || {} };
     if (gridBypassInput) gridBypassInput.checked = settings.gridBypassEnabled;
     if (autoAdSkipInput) autoAdSkipInput.checked = settings.autoAdSkip;
     if (autoDismissPopupInput) autoDismissPopupInput.checked = settings.autoDismissPopup;
   });
+  const notifyTabs = (settings) => {
+    if (!chrome.tabs) return;
+    chrome.tabs.query({ url: ["*://chzzk.naver.com/*", "*://*.chzzk.naver.com/*"] }, (tabs) => {
+      tabs.forEach((tab) => {
+        if (tab.id) {
+          chrome.tabs.sendMessage(tab.id, {
+            source: "CHZZK_CLEAN_EXT",
+            type: "SETTINGS_UPDATED",
+            settings
+          }).catch(() => {
+          });
+        }
+      });
+    });
+  };
   const saveSettings = () => {
     const newSettings = {
       enabled: true,
@@ -58,6 +82,7 @@ document.addEventListener("DOMContentLoaded", () => {
     };
     chrome.storage.local.set({ settings: newSettings }, () => {
       console.log("[ChzzkClean] 설정 변경 완료:", newSettings);
+      notifyTabs(newSettings);
     });
   };
   gridBypassInput?.addEventListener("change", saveSettings);

@@ -87,6 +87,76 @@
       ? root.queueMicrotask.bind(root)
       : (callback) => Promise.resolve().then(callback);
 
+  // ========================================================
+  // [ChzzkClean] 확장 프로그램 팝업 토글 설정 연동 브릿지
+  // ========================================================
+  const CLEAN_SETTINGS = {
+    gridBypassEnabled: true,
+    autoAdSkip: true,
+    autoDismissPopup: true,
+  };
+
+  try {
+    const cachedSettings = root.localStorage?.getItem("chzzk_clean_settings");
+    if (cachedSettings) {
+      Object.assign(CLEAN_SETTINGS, JSON.parse(cachedSettings));
+    }
+  } catch (e) {}
+
+  try {
+    const domSettings = root.document?.documentElement?.getAttribute("data-chzzk-clean-settings");
+    if (domSettings) {
+      Object.assign(CLEAN_SETTINGS, JSON.parse(domSettings));
+    }
+  } catch (e) {}
+
+  root.addEventListener("message", (e) => {
+    if (e.data?.source === "CHZZK_CLEAN_EXT" && e.data?.type === "SETTINGS_UPDATED") {
+      if (e.data.settings) {
+        Object.assign(CLEAN_SETTINGS, e.data.settings);
+        try {
+          root.localStorage?.setItem("chzzk_clean_settings", JSON.stringify(CLEAN_SETTINGS));
+        } catch (err) {}
+        console.info(`${PREFIX} [ChzzkClean] 토글 설정 동기화 완료:`, CLEAN_SETTINGS);
+        const style = document.getElementById("chzzk-p2p-bypass-style");
+        if (style) {
+          style.disabled = !CLEAN_SETTINGS.autoDismissPopup;
+        }
+      }
+    }
+  });
+
+  // Windows 환경 네이버 플러그인 요구 원천 우회
+  try {
+    Object.defineProperty(navigator, "platform", {
+      get: () => "MacIntel",
+      configurable: true,
+    });
+    const originalUA = navigator.userAgent;
+    if (originalUA.includes("Windows")) {
+      const macUA = originalUA.replace(/Windows NT [0-9.]+; Win64; x64/i, "Macintosh; Intel Mac OS X 10_15_7");
+      Object.defineProperty(navigator, "userAgent", {
+        get: () => macUA,
+        configurable: true,
+      });
+    }
+    const pluginId = "ooadnieabchijkibjpeieeliohjidnjj";
+    const wChrome = root.chrome;
+    if (wChrome) {
+      if (!wChrome.runtime) wChrome.runtime = {};
+      const origSend = wChrome.runtime.sendMessage;
+      wChrome.runtime.sendMessage = function (...args) {
+        if (typeof args[0] === "string" && args[0].includes(pluginId)) {
+          const cb = typeof args[args.length - 1] === "function" ? args[args.length - 1] : null;
+          const mock = { installed: true, running: true, status: "RUNNING", version: "2.1.0", success: true };
+          if (cb) { root.setTimeout(() => cb(mock), 0); return; }
+          return Promise.resolve(mock);
+        }
+        return origSend ? origSend.apply(this, args) : Promise.resolve();
+      };
+    }
+  } catch (e) {}
+
   const PLAYBACK_FIELDS = Object.freeze([
     "livePlaybackJson",
     "liveRewindPlaybackJson",
@@ -998,6 +1068,7 @@
   }
 
   function removeP2pMetadata(record) {
+    if (!CLEAN_SETTINGS.gridBypassEnabled) return false;
     let changed = false;
 
     for (const key of Object.keys(record)) {
@@ -1022,6 +1093,9 @@
   }
 
   function rewriteTrack(track) {
+    if (!CLEAN_SETTINGS.gridBypassEnabled) {
+      return { keep: true, changed: false };
+    }
     if (!isRecord(track)) {
       return { keep: true, changed: false };
     }
@@ -1108,6 +1182,9 @@
   }
 
   function rewritePlayback(playback) {
+    if (!CLEAN_SETTINGS.gridBypassEnabled) {
+      return false;
+    }
     if (
       !isRecord(playback) ||
       (!Array.isArray(playback.media) && !isRecord(playback.live))
@@ -2197,6 +2274,7 @@
   function installEarlyStyle() {
     const style = document.createElement("style");
     style.id = "chzzk-p2p-bypass-style";
+    style.disabled = !CLEAN_SETTINGS.autoDismissPopup;
     style.textContent = `
       ${AUXILIARY_VIDEO_SELECTOR},
       ${AUXILIARY_UI_SELECTOR},
@@ -2289,6 +2367,80 @@
         }
       });
       observer.observe(document, { childList: true });
+    }
+  }
+
+  function installPopupDismissObserver() {
+    const AD_BLOCK_PATTERN = /광고\s*차단|애드블록|adblock|광고\s*방해없이|원활한\s*서비스\s*이용을\s*위해/i;
+    const GRID_POPUP_PATTERN = /그리드\s*(프로그램)?\s*(설치|다운로드)|1080p\s*(화질)?\s*시청을\s*위해|고화질\s*시청을\s*위해|동영상\s*플러그인|플러그인\s*(설치|필요)|p2p/i;
+
+    const checkElement = (node) => {
+      if (!CLEAN_SETTINGS.autoDismissPopup) return;
+      if (!(node instanceof HTMLElement)) return;
+
+      const text = node.textContent || "";
+      const isAdBlock = AD_BLOCK_PATTERN.test(text);
+      const isGrid = GRID_POPUP_PATTERN.test(text);
+
+      if (isAdBlock || isGrid) {
+        const popupContainer =
+          node.closest('[role="dialog"]') ||
+          node.closest('[role="alertdialog"]') ||
+          node.closest('[class*="popup_container"]') ||
+          node.closest('[class*="modal"]') ||
+          node.closest('[class*="layer_"]') ||
+          node;
+
+        if (popupContainer instanceof HTMLElement) {
+          popupContainer.style.setProperty("display", "none", "important");
+          popupContainer.style.setProperty("visibility", "hidden", "important");
+          popupContainer.style.setProperty("pointer-events", "none", "important");
+
+          const closeBtn =
+            popupContainer.querySelector('button[class*="close"]') ||
+            popupContainer.querySelector('button[class*="confirm"]') ||
+            popupContainer.querySelector("button");
+
+          if (closeBtn instanceof HTMLElement) {
+            closeBtn.click();
+          }
+
+          root.setTimeout(() => {
+            const video = document.querySelector("video");
+            if (video && video.paused) {
+              video.play().catch(() => {});
+            }
+          }, 150);
+        }
+      }
+
+      if (node.querySelector?.('a[href*="ooadnieabchijkibjpeieeliohjidnjj"]') || (node.tagName === "A" && node.href?.includes("ooadnieabchijkibjpeieeliohjidnjj"))) {
+        node.style.setProperty("display", "none", "important");
+      }
+    };
+
+    const observer = new MutationObserver((mutations) => {
+      if (!CLEAN_SETTINGS.autoDismissPopup) return;
+      for (const m of mutations) {
+        for (const added of Array.from(m.addedNodes)) {
+          if (added instanceof Element) {
+            checkElement(added);
+          }
+        }
+      }
+    });
+
+    const start = () => {
+      const target = document.body || document.documentElement;
+      if (target) {
+        observer.observe(target, { childList: true, subtree: true });
+      }
+    };
+
+    if (document.readyState === "loading") {
+      document.addEventListener("DOMContentLoaded", start, { once: true });
+    } else {
+      start();
     }
   }
 
@@ -3177,6 +3329,7 @@
         }
         entry.audioRestored = true;
       }
+      if (!CLEAN_SETTINGS.gridBypassEnabled) return;
       if (entry.video.paused || entry.video.playbackRate === 0) return;
       const tracks = Array.from(entry.api.videoTracks ?? []);
       if (!tracks.length) return;
@@ -4425,6 +4578,7 @@
     }
 
     installEarlyStyle();
+    installPopupDismissObserver();
     const lastSource = new WeakMap();
     const advancedSource = new WeakMap();
     const advanceBindings = new WeakMap();
@@ -4612,6 +4766,9 @@
       defaultPlaybackRateMethod.descriptor.set;
 
     const finishPlayerState = (video, source, reason) => {
+      if (!CLEAN_SETTINGS.autoAdSkip) {
+        return;
+      }
       const container = video.closest(AUXILIARY_VIDEO_SELECTOR);
       const containerIsActive =
         container instanceof HTMLElement && container.style.display === "block";
@@ -4716,6 +4873,7 @@
       const scheduledAt = monotonicNow();
       const scope = capturePlaybackTaskScope(video);
       enqueueMicrotask(() => {
+        if (!CLEAN_SETTINGS.autoAdSkip) return;
         if (
           !isPlaybackTaskCurrent(scope) ||
           advanceBindings.get(video) !== binding ||
