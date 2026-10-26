@@ -12,7 +12,7 @@
     <header class="header">
       <div class="logo-area">
         <span class="logo-text">치지직 클린</span>
-        <span class="version" id="versionText">v2.0.14</span>
+        <span class="version" id="versionText">v2.0.15</span>
       </div>
       <div class="status-badge active">
         <span class="status-dot"></span>
@@ -34,8 +34,8 @@
 
       <div class="item">
         <div class="item-info">
-          <span class="title">저지연 모드 (실시간 소통)</span>
-          <span class="desc">버퍼 지연을 최소화하여 실시간 스트리밍 유지</span>
+          <span class="title">저지연 모드 (네이티브)</span>
+          <span class="desc">치지직 공식 저지연 엔진 자동 활성화</span>
         </div>
         <label class="switch">
           <input type="checkbox" id="lowLatencyMode" checked>
@@ -43,23 +43,10 @@
         </label>
       </div>
 
-      <div class="item sub-item" id="targetLatencyArea">
-        <div class="item-info">
-          <div class="sub-header">
-            <span class="title">목표 지연시간 조절</span>
-            <span class="badge-value" id="targetLatencyValue">2.0초</span>
-          </div>
-          <span class="desc" id="targetLatencyDesc">권장: 2.0초 (버퍼링 방지 및 실시간 소통 균형)</span>
-        </div>
-        <div class="range-container">
-          <input type="range" id="targetLatency" min="1.0" max="5.0" step="0.5" value="2.0">
-        </div>
-      </div>
-
       <div class="item">
         <div class="item-info">
-          <span class="title">입력창 지연시간 표시</span>
-          <span class="desc">채팅 입력창 위에 실시간 방송 딜레이 및 버퍼 표시</span>
+          <span class="title">입력창 지연시간 & 빨리감기</span>
+          <span class="desc">지연시간 표시 (클릭 또는 ] 키로 실시간 동기화)</span>
         </div>
         <label class="switch">
           <input type="checkbox" id="chatLatencyDisplay" checked>

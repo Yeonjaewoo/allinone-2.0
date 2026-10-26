@@ -2454,51 +2454,85 @@
   }
 
   // ========================================================
-  // [ChzzkClean] 저지연 모드 엔진 (v2.0.7 기반 안정화 + 스마트 라이브 싱크)
+  // [ChzzkClean] 네이티브 저지연 위임 엔진 (올인원 방식) & 빨리감기
   // ========================================================
   let smoothedLatency = null;
   let syncNativeLowLatencyFn = null;
-  let traceLiveLatencyFn = null;
   let updateLatencyBadgeFn = null;
+  let isFastForwarding = false;
+  let fastForwardVideo = null;
+  let syncFeedbackUntil = 0;
 
   function applySettingsImmediately() {
     if (typeof syncNativeLowLatencyFn === "function") {
       syncNativeLowLatencyFn(true);
-    }
-    if (typeof traceLiveLatencyFn === "function") {
-      traceLiveLatencyFn();
     }
     if (typeof updateLatencyBadgeFn === "function") {
       updateLatencyBadgeFn();
     }
   }
 
+  function getPlayerStore() {
+    try {
+      const playerEl =
+        document.querySelector(".pzp-pc") ||
+        document.querySelector(".pzp") ||
+        document.querySelector('[class*="live_player"]');
+      return root.__STORE__ || playerEl?.__vue__?.$store || null;
+    } catch {
+      return null;
+    }
+  }
+
+  // [원클릭 실시간 당기기] 라이브 최전방으로 즉시 동기화
+  function triggerCatchUp(video) {
+    try {
+      const v = video || document.querySelector("video");
+      const store = getPlayerStore();
+
+      if (store?.dispatch) {
+        store.dispatch("goLive").catch?.(() => {});
+      }
+
+      if (v && v.seekable && v.seekable.length > 0) {
+        const liveEnd = v.seekable.end(v.seekable.length - 1);
+        if (Number.isFinite(liveEnd) && liveEnd > 0) {
+          v.currentTime = Math.max(0, liveEnd - 1.2);
+        }
+      }
+
+      if (v) v.playbackRate = 1.0;
+      isFastForwarding = false;
+      syncFeedbackUntil = Date.now() + 1500;
+      console.info(`${PREFIX} [ChzzkClean] 실시간 라이브로 즉시 당기기 완료`);
+      if (typeof updateLatencyBadgeFn === "function") updateLatencyBadgeFn();
+    } catch (e) {
+      console.warn(`${PREFIX} [ChzzkClean] 동기화 중 오류:`, e);
+    }
+  }
+
+  // [빨리감기 기능] 1.5배속 토글 (치지직 플러스 방식)
+  function toggleFastForward(video) {
+    const v = video || document.querySelector("video");
+    if (!v) return;
+
+    if (isFastForwarding || v.playbackRate > 1.0) {
+      v.playbackRate = 1.0;
+      isFastForwarding = false;
+      console.info(`${PREFIX} [ChzzkClean] 빨리감기 종료 (정상 1.0배속 복귀)`);
+    } else {
+      v.playbackRate = 1.5;
+      isFastForwarding = true;
+      fastForwardVideo = v;
+      console.info(`${PREFIX} [ChzzkClean] 빨리감기 시작 (1.5배속)`);
+    }
+    if (typeof updateLatencyBadgeFn === "function") updateLatencyBadgeFn();
+  }
+
   function installLowLatencyEngine() {
     let lastAppliedState = null;
-    let lastRoute = currentPlaybackRoute();
-    let lastJumpTime = 0;
 
-    const getPlayerStore = () => {
-      try {
-        const playerEl =
-          document.querySelector(".pzp-pc") ||
-          document.querySelector(".pzp") ||
-          document.querySelector('[class*="live_player"]');
-        return root.__STORE__ || playerEl?.__vue__?.$store || null;
-      } catch {
-        return null;
-      }
-    };
-
-    const triggerGoLive = () => {
-      try {
-        const store = getPlayerStore();
-        if (store?.dispatch) {
-          store.dispatch("goLive").catch?.(() => {});
-        }
-      } catch (e) {}
-    };
-
+    // 네이티브 저지연 모드 동기화 (치지직 공식 Vue Store에 위임)
     const syncNativeLowLatency = (force = false) => {
       const isLive = /^\/live\/[a-f0-9]{32}(?:\/|$)/i.test(root.location?.pathname ?? "");
       if (!isLive) return;
@@ -2520,113 +2554,62 @@
     };
     syncNativeLowLatencyFn = syncNativeLowLatency;
 
-    // 실시간 버퍼 지연 추적 및 스마트 배속 제어 엔진 (스마트 체이서)
-    const traceLiveLatency = () => {
-      const isLive = /^\/live\/[a-f0-9]{32}(?:\/|$)/i.test(root.location?.pathname ?? "");
-      if (!isLive) return;
-
-      const now = root.performance?.now?.() ?? Date.now();
-      const currentRoute = currentPlaybackRoute();
-      if (currentRoute !== lastRoute) {
-        lastRoute = currentRoute;
-        lastAppliedState = null;
-        smoothedLatency = null;
-        lastJumpTime = 0;
-      }
-
-      const videos = document.querySelectorAll("video");
-      for (const video of videos) {
-        if (!video.isConnected || video.paused || video.ended || isAuxiliaryVideo(video)) {
-          continue;
-        }
-
-        if (video.seekable && video.seekable.length > 0) {
-          const liveEnd = video.seekable.end(video.seekable.length - 1);
-          const rawLatency = Math.max(0, liveEnd - video.currentTime);
-
-          // 전방 버퍼(Forward Buffer) 길이 정밀 계산
-          let forwardBuffer = 0;
-          if (video.buffered && video.buffered.length > 0) {
-            for (let i = 0; i < video.buffered.length; i++) {
-              if (video.currentTime >= video.buffered.start(i) - 0.1 && video.currentTime <= video.buffered.end(i) + 0.1) {
-                forwardBuffer = Math.max(0, video.buffered.end(i) - video.currentTime);
-                break;
-              }
-            }
-          }
-
-          if (CLEAN_SETTINGS.lowLatencyMode) {
-            const target = typeof CLEAN_SETTINGS.targetLatency === "number" ? CLEAN_SETTINGS.targetLatency : 2.0;
-            const diff = rawLatency - target; // 양수: 목표보다 뒤처짐(지연 큼), 음수: 목표보다 앞섬(지연 작음)
-
-            // 1) [원인 1 해결: 방송 진입 초기 강제 시크 전면 제거]
-            // 진입 초기 강제 currentTime 점프를 일절 하지 않고 치지직 플레이어가 자체 버퍼로 부드럽게 시작하도록 허용!
-
-            // 2) [극심한 지연 누적(15초 이상) 장시간 방치 복구]
-            // 백그라운드 탭 방치나 일시정지 후 재생 등으로 15초 이상 심각하게 벌어졌을 때만 안전 싱크 점프 (쿨다운 15초)
-            const jumpCooldownElapsed = (now - lastJumpTime) / 1000;
-            if (diff > 15.0 && jumpCooldownElapsed > 15.0 && video.currentTime > 5.0 && liveEnd > target + 2.0) {
-              lastJumpTime = now;
-              triggerGoLive();
-              video.currentTime = Math.max(0, liveEnd - target);
-              console.info(`${PREFIX} [ChzzkClean] 극심한 지연 누적 복구 -> 목표 위치(${target}s)로 싱크`);
-              continue;
-            }
-
-            // 3) [원인 2 해결: 4~5초 밀림 방지 스마트 체이서 & 버퍼 가드]
-            // A. 버퍼 고갈 초밀착 위험 가드 (지연 1.0초 미만 또는 잔여 버퍼 0.6초 미만 위기)
-            // 지연이 1.0초 이하로 너무 바짝 붙을 때만 0.95배속으로 안전하게 감속
-            if (rawLatency < 1.0 || (rawLatency < target && forwardBuffer < 0.6)) {
-              if (video.playbackRate !== 0.95) video.playbackRate = 0.95;
-            }
-            // B. 목표치보다 앞섰을 때 (예: target 2.0초인데 1.0s ~ 1.6s 사이)
-            // 0.97배속으로 부드럽게 감속하여 목표치로 복귀
-            else if (diff < -0.4) {
-              if (video.playbackRate !== 0.97) video.playbackRate = 0.97;
-            }
-            // C. 목표 안정 데드존 (target ± 0.35s, 예: 1.65s ~ 2.35s)
-            // 정상 1.00배속 유지 (가속/감속 절대 금지)
-            else if (Math.abs(diff) <= 0.35) {
-              if (video.playbackRate !== 1.0) video.playbackRate = 1.0;
-            }
-            // D. 지연이 3초 이상으로 크게 밀렸을 때 (diff > 1.0s)
-            // 전방 버퍼가 0.8초 이상 확보되어 있으면 1.07배속으로 시원하게 당겨 4~5초 밀림 완벽 차단!
-            else if (diff > 1.0 && forwardBuffer >= 0.8) {
-              if (video.playbackRate !== 1.07) video.playbackRate = 1.07;
-            }
-            // E. 지연이 살짝 뒤처졌을 때 (0.35s < diff <= 1.0s, 예: 지연 2.35s ~ 3.0s)
-            // 1.03배속으로 부드럽게 목표치에 안착
-            else if (diff > 0.35 && forwardBuffer >= 0.8) {
-              if (video.playbackRate !== 1.03) video.playbackRate = 1.03;
-            }
-            // F. 기본 정상 배속
-            else {
-              if (video.playbackRate !== 1.0) video.playbackRate = 1.0;
-            }
-          } else {
-            // 저지연 모드 OFF 시 정상 배속 복구
-            if (video.playbackRate !== 1.0) video.playbackRate = 1.0;
-          }
-        }
-      }
-    };
-    traceLiveLatencyFn = traceLiveLatency;
-
+    // 주기적 동기화: 배속은 임의로 조작하지 않고 네이티브에 전적 위임
     root.setInterval(() => {
       syncNativeLowLatency();
-      traceLiveLatency();
+
+      // 빨리감기 중 실시간(지연 2.5초 이하)에 도달하면 자동으로 정상 1.0배속 복귀
+      if (isFastForwarding && fastForwardVideo && fastForwardVideo.isConnected) {
+        if (fastForwardVideo.seekable && fastForwardVideo.seekable.length > 0) {
+          const liveEnd = fastForwardVideo.seekable.end(fastForwardVideo.seekable.length - 1);
+          const currentLatency = Math.max(0, liveEnd - fastForwardVideo.currentTime);
+          if (currentLatency <= 2.5) {
+            fastForwardVideo.playbackRate = 1.0;
+            isFastForwarding = false;
+            console.info(`${PREFIX} [ChzzkClean] 실시간 도달 -> 정상 1.0배속 자동 복귀`);
+            if (typeof updateLatencyBadgeFn === "function") updateLatencyBadgeFn();
+          }
+        }
+      }
     }, 1000);
 
     root.addEventListener("popstate", () => {
       lastAppliedState = null;
-      lastRoute = currentPlaybackRoute();
-      smoothedLatency = null;
-      lastJumpTime = 0;
+      isFastForwarding = false;
       root.setTimeout(syncNativeLowLatency, 400);
+    });
+
+    // 단축키 지원: ']' (빨리감기 토글), '[' 또는 '=' (정상 1.0배속 복귀)
+    root.addEventListener("keydown", (e) => {
+      const target = e.target;
+      if (
+        target &&
+        (target.tagName === "INPUT" ||
+          target.tagName === "TEXTAREA" ||
+          target.isContentEditable ||
+          target.getAttribute?.("contenteditable") === "true")
+      ) {
+        return;
+      }
+
+      if (e.ctrlKey || e.altKey || e.metaKey) return;
+
+      if (e.key === "]" || e.key === "}") {
+        e.preventDefault();
+        toggleFastForward();
+      } else if (e.key === "[" || e.key === "{" || e.key === "=" || e.key === "+") {
+        e.preventDefault();
+        const v = document.querySelector("video");
+        if (v) {
+          v.playbackRate = 1.0;
+          isFastForwarding = false;
+          if (typeof updateLatencyBadgeFn === "function") updateLatencyBadgeFn();
+        }
+      }
     });
   }
 
-  // [ChzzkClean] 채팅 입력창 실시간 지연시간/버퍼 표시 엔진
+  // [ChzzkClean] 채팅 입력창 실시간 지연시간/버퍼 표시 & 빨리감기 배지
   function installChatLatencyDisplayEngine() {
     const updateLatencyBadge = () => {
       const isLive = /^\/live\/[a-f0-9]{32}(?:\/|$)/i.test(root.location?.pathname ?? "");
@@ -2637,7 +2620,6 @@
         return;
       }
 
-      // 채팅 입력창 컨테이너 탐색
       const inputContainer =
         root.document?.querySelector('[class*="live_chatting_input_container"]') ||
         root.document?.querySelector('[class*="chatting_input_area"]') ||
@@ -2659,22 +2641,44 @@
         badge.id = "chzzk-clean-chat-latency";
         badge.style.cssText = `
           position: absolute;
-          top: -22px;
+          top: -24px;
           right: 4px;
           font-size: 11px;
           font-weight: 600;
-          color: rgba(255, 255, 255, 0.5);
-          background: rgba(0, 0, 0, 0.45);
-          padding: 2px 7px;
+          color: rgba(255, 255, 255, 0.6);
+          background: rgba(0, 0, 0, 0.55);
+          padding: 2px 8px;
           border-radius: 4px;
           user-select: none;
-          pointer-events: none;
+          cursor: pointer;
           white-space: nowrap;
           letter-spacing: -0.02em;
           z-index: 10;
           backdrop-filter: blur(4px);
-          transition: color 0.2s ease;
+          transition: all 0.2s ease;
+          display: inline-flex;
+          align-items: center;
+          gap: 4px;
+          border: 1px solid rgba(255, 255, 255, 0.1);
         `;
+        badge.title = "클릭: 최신 라이브로 즉시 당기기 | 단축키: ] (빨리감기)";
+
+        badge.addEventListener("mouseenter", () => {
+          badge.style.background = "rgba(0, 0, 0, 0.75)";
+          badge.style.borderColor = "rgba(0, 255, 163, 0.4)";
+        });
+        badge.addEventListener("mouseleave", () => {
+          badge.style.background = "rgba(0, 0, 0, 0.55)";
+          badge.style.borderColor = "rgba(255, 255, 255, 0.1)";
+        });
+
+        // 배지 클릭 시 즉시 라이브 최전방으로 당기기
+        badge.addEventListener("click", (e) => {
+          e.preventDefault();
+          e.stopPropagation();
+          triggerCatchUp();
+        });
+
         inputContainer.appendChild(badge);
       }
 
@@ -2690,10 +2694,10 @@
         return;
       }
 
-      // 비디오가 재생 시작되기 전 초기 로딩 상태 마스킹
-      if (video.readyState < 2 || video.currentTime < 0.3) {
-        badge.textContent = "지연: 측정 중...";
-        badge.style.color = "rgba(255, 255, 255, 0.4)";
+      // 동기화 피드백 표시 중
+      if (Date.now() < syncFeedbackUntil) {
+        badge.textContent = "⚡️ 라이브 동기화 완료";
+        badge.style.color = "#00ffa3";
         return;
       }
 
@@ -2716,26 +2720,35 @@
         }
       }
 
-      if (rawLatency >= 0 && rawLatency < 60) {
-        // HLS 청크 도착에 따른 미세 진동 스무딩 필터
-        if (smoothedLatency === null || Math.abs(rawLatency - smoothedLatency) > 3.0) {
-          smoothedLatency = rawLatency;
-        } else {
-          smoothedLatency = smoothedLatency * 0.75 + rawLatency * 0.25;
-        }
-
-        const displayLatency = smoothedLatency;
-        badge.textContent = `지연: ${displayLatency.toFixed(2)}s (버퍼 ${buffer.toFixed(1)}s)`;
-        if (displayLatency < 2.5) {
-          badge.style.color = "#00ffa3"; // 양호 (민트)
-        } else if (displayLatency < 4.0) {
-          badge.style.color = "#ffb800"; // 보통 (노랑)
-        } else {
-          badge.style.color = "#ff5555"; // 지연 심함 (빨강)
-        }
-      } else {
+      // [핵심] 방송 진입 극초반 30초 노출 원천 마스킹
+      // 비디오가 막 시작하는 2초 이내이거나, 플레이어가 타임라인 정렬 전(rawLatency > 20.0)일 때는 "측정 중..."으로 유지
+      if (video.currentTime < 2.0 || rawLatency > 20.0 || rawLatency < 0) {
         badge.textContent = "지연: 측정 중...";
         badge.style.color = "rgba(255, 255, 255, 0.4)";
+        return;
+      }
+
+      // HLS 청크 도착에 따른 미세 진동 스무딩 필터
+      if (smoothedLatency === null || Math.abs(rawLatency - smoothedLatency) > 3.0) {
+        smoothedLatency = rawLatency;
+      } else {
+        smoothedLatency = smoothedLatency * 0.75 + rawLatency * 0.25;
+      }
+
+      const displayLatency = smoothedLatency;
+
+      if (isFastForwarding) {
+        badge.textContent = `⏩ 빨리감기 중 (1.5x) · 지연 ${displayLatency.toFixed(1)}s`;
+        badge.style.color = "#ffb800";
+      } else {
+        badge.textContent = `지연: ${displayLatency.toFixed(1)}s (버퍼 ${buffer.toFixed(1)}s) ⟳`;
+        if (displayLatency < 3.5) {
+          badge.style.color = "#00ffa3"; // 양호 (민트)
+        } else if (displayLatency < 5.5) {
+          badge.style.color = "#ffb800"; // 보통 (노랑)
+        } else {
+          badge.style.color = "#ff7777"; // 지연 심함 (빨강 - 클릭 유도)
+        }
       }
     };
     updateLatencyBadgeFn = updateLatencyBadge;
