@@ -1068,7 +1068,6 @@
   }
 
   function removeP2pMetadata(record) {
-    if (!CLEAN_SETTINGS.gridBypassEnabled) return false;
     let changed = false;
 
     for (const key of Object.keys(record)) {
@@ -1093,9 +1092,6 @@
   }
 
   function rewriteTrack(track) {
-    if (!CLEAN_SETTINGS.gridBypassEnabled) {
-      return { keep: true, changed: false };
-    }
     if (!isRecord(track)) {
       return { keep: true, changed: false };
     }
@@ -1182,9 +1178,6 @@
   }
 
   function rewritePlayback(playback) {
-    if (!CLEAN_SETTINGS.gridBypassEnabled) {
-      return false;
-    }
     if (
       !isRecord(playback) ||
       (!Array.isArray(playback.media) && !isRecord(playback.live))

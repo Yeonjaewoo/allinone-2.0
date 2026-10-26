@@ -1,6 +1,6 @@
 {
   "name": "chzzk-clean",
-  "version": "2.0.1",
+  "version": "2.0.2",
   "description": "치지직 광고 및 그리드 팝업 차단, 1080p 고화질 자동 고정 클린 확장프로그램",
   "type": "module",
   "scripts": {
