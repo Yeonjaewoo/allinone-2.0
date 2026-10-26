@@ -41,6 +41,7 @@ true&&(function polyfill() {
 document.addEventListener("DOMContentLoaded", () => {
   const versionText = document.getElementById("versionText");
   const gridBypassInput = document.getElementById("gridBypass");
+  const lowLatencyModeInput = document.getElementById("lowLatencyMode");
   const autoAdSkipInput = document.getElementById("autoAdSkip");
   const autoDismissPopupInput = document.getElementById("autoDismissPopup");
   try {
@@ -54,6 +55,7 @@ document.addEventListener("DOMContentLoaded", () => {
   chrome.storage.local.get(["settings"], (res) => {
     const settings = { ...DEFAULT_SETTINGS, ...res.settings || {} };
     if (gridBypassInput) gridBypassInput.checked = settings.gridBypassEnabled;
+    if (lowLatencyModeInput) lowLatencyModeInput.checked = settings.lowLatencyMode;
     if (autoAdSkipInput) autoAdSkipInput.checked = settings.autoAdSkip;
     if (autoDismissPopupInput) autoDismissPopupInput.checked = settings.autoDismissPopup;
   });
@@ -76,6 +78,7 @@ document.addEventListener("DOMContentLoaded", () => {
     const newSettings = {
       enabled: true,
       gridBypassEnabled: gridBypassInput?.checked ?? true,
+      lowLatencyMode: lowLatencyModeInput?.checked ?? true,
       autoAdSkip: autoAdSkipInput?.checked ?? true,
       autoDismissPopup: autoDismissPopupInput?.checked ?? true,
       preferredQuality: 1080
@@ -86,6 +89,7 @@ document.addEventListener("DOMContentLoaded", () => {
     });
   };
   gridBypassInput?.addEventListener("change", saveSettings);
+  lowLatencyModeInput?.addEventListener("change", saveSettings);
   autoAdSkipInput?.addEventListener("change", saveSettings);
   autoDismissPopupInput?.addEventListener("change", saveSettings);
 });

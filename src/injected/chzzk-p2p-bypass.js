@@ -92,6 +92,7 @@
   // ========================================================
   const CLEAN_SETTINGS = {
     gridBypassEnabled: true,
+    lowLatencyMode: true,
     autoAdSkip: true,
     autoDismissPopup: true,
   };
@@ -2437,6 +2438,81 @@
     }
   }
 
+  // [ChzzkClean] 저지연 모드 엔진 (네이티브 저지연 활성화 + Live Edge Chaser)
+  function installLowLatencyEngine() {
+    let lastAppliedState = null;
+
+    const syncNativeLowLatency = () => {
+      const isLive = /^\/live\/[a-f0-9]{32}(?:\/|$)/i.test(root.location?.pathname ?? "");
+      if (!isLive) return;
+
+      const targetState = !!CLEAN_SETTINGS.lowLatencyMode;
+      if (lastAppliedState === targetState) return;
+
+      try {
+        const playerEl =
+          document.querySelector(".pzp-pc") ||
+          document.querySelector(".pzp") ||
+          document.querySelector('[class*="live_player"]');
+        const store = root.__STORE__ || playerEl?.__vue__?.$store;
+        if (store?.state) {
+          store.dispatch?.("setLowLatency", targetState).catch?.(() => {});
+          store.dispatch?.("updatePlayerState", { lowLatencyEnabled: targetState, lowLatency: targetState }).catch?.(() => {});
+          store.commit?.("setLowLatency", targetState);
+          store.commit?.("updatePlayerState", { lowLatencyEnabled: targetState, lowLatency: targetState });
+          lastAppliedState = targetState;
+          console.info(`${PREFIX} [ChzzkClean] 네이티브 저지연 모드 ${targetState ? "활성화" : "비활성화"}`);
+        }
+      } catch (e) {}
+    };
+
+    // 실시간 버퍼 지연 추적 및 복구 (Live Edge Catch-up)
+    const traceLiveLatency = () => {
+      const isLive = /^\/live\/[a-f0-9]{32}(?:\/|$)/i.test(root.location?.pathname ?? "");
+      if (!isLive) return;
+
+      const videos = document.querySelectorAll("video");
+      for (const video of videos) {
+        if (!video.isConnected || video.paused || video.ended || isAuxiliaryVideo(video)) {
+          continue;
+        }
+
+        if (video.seekable && video.seekable.length > 0) {
+          const liveEnd = video.seekable.end(video.seekable.length - 1);
+          const latency = liveEnd - video.currentTime;
+
+          if (CLEAN_SETTINGS.lowLatencyMode) {
+            // 1) 지연 12초 이상 크게 누적 시: 즉시 최신 라이브 엣지 근처로 점프
+            if (latency > 12.0) {
+              video.currentTime = Math.max(0, liveEnd - 1.2);
+            }
+            // 2) 지연 2.8초 이상 누적 시: 1.1배속으로 재생하여 자연스럽게 실시간 추적
+            else if (latency > 2.8) {
+              if (video.playbackRate !== 1.1) video.playbackRate = 1.1;
+            }
+            // 3) 지연 1.5초 이내 도달 시: 정상 1.0배속 유지
+            else if (latency <= 1.5) {
+              if (video.playbackRate !== 1.0) video.playbackRate = 1.0;
+            }
+          } else {
+            // 저지연 모드 OFF 시 정상 배속 복구
+            if (video.playbackRate !== 1.0) video.playbackRate = 1.0;
+          }
+        }
+      }
+    };
+
+    root.setInterval(() => {
+      syncNativeLowLatency();
+      traceLiveLatency();
+    }, 1000);
+
+    root.addEventListener("popstate", () => {
+      lastAppliedState = null;
+      root.setTimeout(syncNativeLowLatency, 400);
+    });
+  }
+
   function hasAdMediaSource(video, source = video.currentSrc || video.src) {
     if (!source || source.startsWith("blob:")) {
       return false;
@@ -4577,6 +4653,7 @@
 
     installEarlyStyle();
     installPopupDismissObserver();
+    installLowLatencyEngine();
     const lastSource = new WeakMap();
     const advancedSource = new WeakMap();
     const advanceBindings = new WeakMap();

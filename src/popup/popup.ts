@@ -6,6 +6,7 @@ import { DEFAULT_SETTINGS, UserSettings } from "../types/chzzk";
 document.addEventListener("DOMContentLoaded", () => {
   const versionText = document.getElementById("versionText");
   const gridBypassInput = document.getElementById("gridBypass") as HTMLInputElement;
+  const lowLatencyModeInput = document.getElementById("lowLatencyMode") as HTMLInputElement;
   const autoAdSkipInput = document.getElementById("autoAdSkip") as HTMLInputElement;
   const autoDismissPopupInput = document.getElementById("autoDismissPopup") as HTMLInputElement;
 
@@ -24,6 +25,7 @@ document.addEventListener("DOMContentLoaded", () => {
     const settings: UserSettings = { ...DEFAULT_SETTINGS, ...(res.settings || {}) };
 
     if (gridBypassInput) gridBypassInput.checked = settings.gridBypassEnabled;
+    if (lowLatencyModeInput) lowLatencyModeInput.checked = settings.lowLatencyMode;
     if (autoAdSkipInput) autoAdSkipInput.checked = settings.autoAdSkip;
     if (autoDismissPopupInput) autoDismissPopupInput.checked = settings.autoDismissPopup;
   });
@@ -52,6 +54,7 @@ document.addEventListener("DOMContentLoaded", () => {
     const newSettings: UserSettings = {
       enabled: true,
       gridBypassEnabled: gridBypassInput?.checked ?? true,
+      lowLatencyMode: lowLatencyModeInput?.checked ?? true,
       autoAdSkip: autoAdSkipInput?.checked ?? true,
       autoDismissPopup: autoDismissPopupInput?.checked ?? true,
       preferredQuality: 1080,
@@ -64,6 +67,7 @@ document.addEventListener("DOMContentLoaded", () => {
   };
 
   gridBypassInput?.addEventListener("change", saveSettings);
+  lowLatencyModeInput?.addEventListener("change", saveSettings);
   autoAdSkipInput?.addEventListener("change", saveSettings);
   autoDismissPopupInput?.addEventListener("change", saveSettings);
 });

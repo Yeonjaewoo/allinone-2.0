@@ -1,4 +1,5 @@
-@echo off
+﻿@echo off
+chcp 65001 >nul
 setlocal
 title 치지직 클린 자동 업데이트
 cd /d "%~dp0"
