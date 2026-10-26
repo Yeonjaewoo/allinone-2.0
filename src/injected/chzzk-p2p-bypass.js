@@ -2440,13 +2440,82 @@
     }
   }
 
-  // [ChzzkClean] 저지연 모드 엔진 (네이티브 저지연 활성화 + Live Edge Chaser)
+  // ========================================================
+  // [ChzzkClean] 실시간 지연시간 및 버퍼 측정 헬퍼 (ptsOffset 기반 고정밀 측정 + 스무딩)
+  // ========================================================
+  let sharedSmoothedLatency = null;
+
+  function measureLiveMetrics(video) {
+    if (!video || !video.isConnected || video.paused || video.ended) {
+      return { latency: -1, buffer: 0, rawLatency: -1 };
+    }
+
+    let forwardBuffer = 0;
+    if (video.buffered && video.buffered.length > 0) {
+      for (let i = 0; i < video.buffered.length; i++) {
+        if (video.currentTime >= video.buffered.start(i) && video.currentTime <= video.buffered.end(i) + 0.1) {
+          forwardBuffer = Math.max(0, video.buffered.end(i) - video.currentTime);
+          break;
+        }
+      }
+    }
+
+    let raw = -1;
+    // 1순위: 치지직 스토어의 ptsOffset (실제 송출 시간과 재생 시간의 절대 지연)
+    try {
+      const playerEl =
+        document.querySelector(".pzp-pc") ||
+        document.querySelector(".pzp") ||
+        document.querySelector('[class*="live_player"]');
+      const store = root.__STORE__ || playerEl?.__vue__?.$store;
+      const ptsOffset = store?.state?.ptsOffset;
+      if (typeof ptsOffset === "number" && ptsOffset > 0) {
+        const u = (Date.now() - (ptsOffset + video.currentTime * 1000)) / 1000;
+        if (Number.isFinite(u) && u >= 0 && u < 120) {
+          raw = u;
+        }
+      }
+    } catch (e) {}
+
+    // 2순위: 버퍼 끝점과의 시차 (올인원 기본 방식)
+    if (raw < 0 && video.buffered && video.buffered.length > 0) {
+      const lastBufferedEnd = video.buffered.end(video.buffered.length - 1);
+      if (lastBufferedEnd >= video.currentTime) {
+        raw = lastBufferedEnd - video.currentTime;
+      }
+    }
+
+    // 3순위: seekable 끝점과의 시차
+    if (raw < 0 && video.seekable && video.seekable.length > 0) {
+      const liveEnd = video.seekable.end(video.seekable.length - 1);
+      if (liveEnd >= video.currentTime) {
+        raw = liveEnd - video.currentTime;
+      }
+    }
+
+    // HLS 청크 유입 주기에 따른 급격한 진동(들쭉날쭉) 방지: 지수이동평균(EMA) 필터
+    if (raw >= 0 && raw < 60) {
+      if (sharedSmoothedLatency === null || Math.abs(raw - sharedSmoothedLatency) > 5.0) {
+        sharedSmoothedLatency = raw;
+      } else {
+        sharedSmoothedLatency = sharedSmoothedLatency * 0.85 + raw * 0.15;
+      }
+    } else if (raw < 0) {
+      sharedSmoothedLatency = null;
+    }
+
+    return {
+      latency: sharedSmoothedLatency !== null ? sharedSmoothedLatency : raw,
+      rawLatency: raw,
+      buffer: forwardBuffer,
+    };
+  }
+
+  // [ChzzkClean] 저지연 모드 엔진 (네이티브 저지연 활성화 + 극미세 스마트 싱크)
   function installLowLatencyEngine() {
     let lastAppliedState = null;
     let lastRoute = currentPlaybackRoute();
     let lastRouteChangeTime = root.performance?.now?.() ?? Date.now();
-    let lastJumpTime = 0;
-    const videoInitTimes = new WeakMap();
 
     const syncNativeLowLatency = () => {
       const isLive = /^\/live\/[a-f0-9]{32}(?:\/|$)/i.test(root.location?.pathname ?? "");
@@ -2461,21 +2530,22 @@
           document.querySelector('[class*="live_player"]');
         const store = root.__STORE__ || playerEl?.__vue__?.$store;
         if (store?.state) {
-          // 치지직 플레이어 스토어의 현재 저지연 설정값 확인
           const currentStoreState =
             store.state.player?.lowLatencyEnabled ??
             store.state.lowLatencyEnabled ??
             store.state.player?.lowLatency ??
-            store.state.lowLatency;
+            store.state.lowLatency ??
+            store.state.isLowLatency;
 
-          // 이미 스토어에 타겟 상태가 적용되어 있다면 불필요한 재호출(스트림 재연결 유발) 방지
           if (currentStoreState === targetState && lastAppliedState === targetState) {
             return;
           }
 
           if (currentStoreState !== targetState) {
-            store.dispatch?.("setLowLatency", targetState).catch?.(() => {});
             store.dispatch?.("updatePlayerState", { lowLatencyEnabled: targetState, lowLatency: targetState }).catch?.(() => {});
+            store.dispatch?.("setLowLatency", targetState).catch?.(() => {});
+            store.commit?.("setLowLatencyEnabled", targetState);
+            store.commit?.("SET_LOW_LATENCY_ENABLED", targetState);
             store.commit?.("setLowLatency", targetState);
             store.commit?.("updatePlayerState", { lowLatencyEnabled: targetState, lowLatency: targetState });
             console.info(`${PREFIX} [ChzzkClean] 네이티브 저지연 모드 ${targetState ? "활성화" : "비활성화"}`);
@@ -2485,7 +2555,7 @@
       } catch (e) {}
     };
 
-    // 실시간 버퍼 지연 추적 및 복구 (Smart Live Sync & Buffer-aware Chaser)
+    // 실시간 버퍼 지연 추적 및 미세 보정 (Micro-pitch Smart Chaser)
     const traceLiveLatency = () => {
       const isLive = /^\/live\/[a-f0-9]{32}(?:\/|$)/i.test(root.location?.pathname ?? "");
       if (!isLive) return;
@@ -2496,83 +2566,53 @@
         lastRoute = currentRoute;
         lastRouteChangeTime = now;
         lastAppliedState = null;
+        sharedSmoothedLatency = null;
       }
 
-      // 새 방송 진입 후 최소 4초간은 강제 시크 및 가속 제어를 유예 (초기 로딩 및 비디오 플레이어 초기화 보호)
+      // 새 방송 진입 초기(5초간)에는 플레이어 자체의 초기 버퍼링에 전적으로 맡김 (당겨짐/점프 원천 방지)
       const routeElapsed = (now - lastRouteChangeTime) / 1000;
+      if (routeElapsed < 5.0) return;
 
       const videos = document.querySelectorAll("video");
       for (const video of videos) {
-        if (!video.isConnected || video.paused || video.ended || video.seeking || isAuxiliaryVideo(video)) {
+        if (!video.isConnected || video.paused || video.ended || video.seeking || video.readyState < 3 || isAuxiliaryVideo(video)) {
           continue;
         }
 
-        // 비디오별 초기 재생 시작 시간 등록
-        if (!videoInitTimes.has(video)) {
-          videoInitTimes.set(video, now);
-        }
-        const videoElapsed = (now - (videoInitTimes.get(video) || now)) / 1000;
+        const metrics = measureLiveMetrics(video);
+        if (metrics.latency < 0) continue;
 
-        if (video.seekable && video.seekable.length > 0) {
-          const liveEnd = video.seekable.end(video.seekable.length - 1);
-          const latency = Math.max(0, liveEnd - video.currentTime);
+        if (CLEAN_SETTINGS.lowLatencyMode) {
+          const target = typeof CLEAN_SETTINGS.targetLatency === "number" ? CLEAN_SETTINGS.targetLatency : 2.0;
+          const diff = metrics.latency - target;
+          const forwardBuffer = metrics.buffer;
 
-          // 전방 버퍼(Forward Buffer) 길이 계산
-          let forwardBuffer = 0;
-          if (video.buffered && video.buffered.length > 0) {
-            for (let i = 0; i < video.buffered.length; i++) {
-              if (video.currentTime >= video.buffered.start(i) && video.currentTime <= video.buffered.end(i)) {
-                forwardBuffer = video.buffered.end(i) - video.currentTime;
-                break;
-              }
-            }
-          }
+          // [핵심 해결] 강제 시크 점프(currentTime 조작)를 일절 하지 않음!
+          // 방송 들어간 직후나 시청 중 휙 당겨지는 현상을 원천 제거하고,
+          // 오직 1.02배속 / 0.98배속의 극미세 보정으로 자연스럽게 목표치에 안착시킴.
 
-          if (CLEAN_SETTINGS.lowLatencyMode) {
-            const target = typeof CLEAN_SETTINGS.targetLatency === "number" ? CLEAN_SETTINGS.targetLatency : 2.0;
-            const diff = latency - target;
-
-            // [핵심 가드] 비디오가 초기 로딩 중이거나 아직 충분히 재생되지 않은 시점에는 시크 및 가속 금지
-            // - 방송 진입 후 4초 미만
-            // - 비디오 재생 지속 시간 3.5초 미만 (video.currentTime < 3.5)
-            // - 버퍼 준비 상태 부족 (video.readyState < 3)
-            const isInitialBuffering = routeElapsed < 4.0 || videoElapsed < 3.5 || video.currentTime < 3.5 || video.readyState < 3;
-
-            if (isInitialBuffering) {
-              // 초기 로딩 중에는 플레이어 기본 재생(1.0x)에 맡김
-              if (video.playbackRate !== 1.0) video.playbackRate = 1.0;
-              continue;
-            }
-
-            // 1) 지연이 10초 이상 크게 누적된 경우 (버퍼링/일시정지 복구 후):
-            // 무작정 끝으로 가지 않고 사용자가 지정한 목표 지연시간 위치로 점프!
-            // 단, 마지막 점프 후 8초간 쿨다운 유지 (반복 점프 스톨 방지)
-            const jumpCooldownElapsed = (now - lastJumpTime) / 1000;
-            if (diff > 10.0 && jumpCooldownElapsed > 8.0 && liveEnd - target > 0) {
-              lastJumpTime = now;
-              video.currentTime = Math.max(0, liveEnd - target);
-              console.info(`${PREFIX} [ChzzkClean] 큰 지연 누적 감지(${diff.toFixed(1)}s) -> 목표 지연 위치(${target}s)로 싱크 점프`);
-            }
-            // 2) 버퍼가 너무 적으면(1.0초 미만) 가속 시 버퍼링이 발생하므로 즉시 1.0배속으로 버퍼 충전!
-            else if (forwardBuffer < 1.0) {
-              if (video.playbackRate > 1.0) video.playbackRate = 1.0;
-            }
-            // 3) 목표 지연시간보다 0.6초 이상 뒤처지고 버퍼가 1.2초 이상 충분할 때만 가속!
-            else if (diff > 0.6 && forwardBuffer >= 1.2) {
-              if (video.playbackRate !== 1.08) video.playbackRate = 1.08;
-            }
-            // 4) 너무 바짝 붙어서(목표치보다 0.4초 이상 앞섬) 버퍼 고갈 위험이 있을 때는 살짝 감속하여 버퍼 확보
-            else if (diff < -0.4 && forwardBuffer < 1.5) {
-              if (video.playbackRate !== 0.98) video.playbackRate = 0.98;
-            }
-            // 5) 목표 오차 범위 내 도달 시 정상 1.0배속 유지
-            else {
-              if (video.playbackRate !== 1.0) video.playbackRate = 1.0;
-            }
-          } else {
-            // 저지연 모드 OFF 시 정상 배속 복구
+          // 1) 안정 데드존 (목표치 ±0.4s 이내, 예: 1.6s ~ 2.4s):
+          // 정상 속도(1.00x) 유지하여 들쭉날쭉 요동치는 현상 방지!
+          if (Math.abs(diff) <= 0.4) {
             if (video.playbackRate !== 1.0) video.playbackRate = 1.0;
           }
+          // 2) 목표치보다 뒤처졌을 때(diff > 0.4s) & 버퍼 여유가 충분할 때(>= 1.5s):
+          // 사람 귀로 인지할 수 없는 1.02배속(2% 가속)으로 조용하고 부드럽게 지연을 좁힘!
+          else if (diff > 0.4 && forwardBuffer >= 1.5) {
+            if (video.playbackRate !== 1.02) video.playbackRate = 1.02;
+          }
+          // 3) 목표치보다 앞서거나(diff < -0.4s) 버퍼가 1.0초 미만으로 적을 때:
+          // 0.98배속(2% 감속)으로 살짝 늦춰 버퍼를 보충하고 안정화!
+          else if (diff < -0.4 || forwardBuffer < 1.0) {
+            if (video.playbackRate !== 0.98) video.playbackRate = 0.98;
+          }
+          // 그 외 정상 복구
+          else {
+            if (video.playbackRate !== 1.0) video.playbackRate = 1.0;
+          }
+        } else {
+          // 저지연 모드 OFF 시 정상 배속
+          if (video.playbackRate !== 1.0) video.playbackRate = 1.0;
         }
       }
     };
@@ -2586,6 +2626,7 @@
       lastRouteChangeTime = root.performance?.now?.() ?? Date.now();
       lastRoute = currentPlaybackRoute();
       lastAppliedState = null;
+      sharedSmoothedLatency = null;
       root.setTimeout(syncNativeLowLatency, 500);
     };
 
@@ -2656,24 +2697,9 @@
         return;
       }
 
-      let latency = -1;
-      let buffer = 0;
-
-      if (video.seekable && video.seekable.length > 0) {
-        const liveEnd = video.seekable.end(video.seekable.length - 1);
-        latency = Math.max(0, liveEnd - video.currentTime);
-      }
-
-      if (video.buffered && video.buffered.length > 0) {
-        for (let i = 0; i < video.buffered.length; i++) {
-          const start = video.buffered.start(i);
-          const end = video.buffered.end(i);
-          if (video.currentTime >= start && video.currentTime <= end) {
-            buffer = Math.max(0, end - video.currentTime);
-            break;
-          }
-        }
-      }
+      const metrics = measureLiveMetrics(video);
+      const latency = metrics.latency;
+      const buffer = metrics.buffer;
 
       if (latency >= 0) {
         badge.textContent = `지연: ${latency.toFixed(2)}s (버퍼 ${buffer.toFixed(1)}s)`;
