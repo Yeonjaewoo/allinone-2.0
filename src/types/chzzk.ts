@@ -3,10 +3,11 @@
  */
 export interface UserSettings {
   enabled: boolean;
-  gridBypassEnabled: boolean; // 그리드 우회 및 1080p 강제 고정
-  lowLatencyMode: boolean;    // 저지연 모드 (실시간 딜레이 최소화)
-  autoAdSkip: boolean;        // 광고 감지 시 빈 응답 주입 및 자동 스킵
-  autoDismissPopup: boolean;  // 광고차단 및 그리드 설치 유도 팝업 강제 제거
+  gridBypassEnabled: boolean;  // 그리드 우회 및 1080p 강제 고정
+  lowLatencyMode: boolean;     // 저지연 모드 (실시간 딜레이 최소화)
+  chatLatencyDisplay: boolean; // 입력창 실시간 지연시간/버퍼 표시
+  autoAdSkip: boolean;         // 광고 감지 시 빈 응답 주입 및 자동 스킵
+  autoDismissPopup: boolean;   // 광고차단 및 그리드 설치 유도 팝업 강제 제거
   preferredQuality: number | "ABR"; // 선호 화질 (1080, 720 등)
 }
 
@@ -17,6 +18,7 @@ export const DEFAULT_SETTINGS: UserSettings = {
   enabled: true,
   gridBypassEnabled: true,
   lowLatencyMode: true,
+  chatLatencyDisplay: true,
   autoAdSkip: true,
   autoDismissPopup: true,
   preferredQuality: 1080,

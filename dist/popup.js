@@ -42,6 +42,7 @@ document.addEventListener("DOMContentLoaded", () => {
   const versionText = document.getElementById("versionText");
   const gridBypassInput = document.getElementById("gridBypass");
   const lowLatencyModeInput = document.getElementById("lowLatencyMode");
+  const chatLatencyDisplayInput = document.getElementById("chatLatencyDisplay");
   const autoAdSkipInput = document.getElementById("autoAdSkip");
   const autoDismissPopupInput = document.getElementById("autoDismissPopup");
   try {
@@ -56,6 +57,7 @@ document.addEventListener("DOMContentLoaded", () => {
     const settings = { ...DEFAULT_SETTINGS, ...res.settings || {} };
     if (gridBypassInput) gridBypassInput.checked = settings.gridBypassEnabled;
     if (lowLatencyModeInput) lowLatencyModeInput.checked = settings.lowLatencyMode;
+    if (chatLatencyDisplayInput) chatLatencyDisplayInput.checked = settings.chatLatencyDisplay;
     if (autoAdSkipInput) autoAdSkipInput.checked = settings.autoAdSkip;
     if (autoDismissPopupInput) autoDismissPopupInput.checked = settings.autoDismissPopup;
   });
@@ -79,6 +81,7 @@ document.addEventListener("DOMContentLoaded", () => {
       enabled: true,
       gridBypassEnabled: gridBypassInput?.checked ?? true,
       lowLatencyMode: lowLatencyModeInput?.checked ?? true,
+      chatLatencyDisplay: chatLatencyDisplayInput?.checked ?? true,
       autoAdSkip: autoAdSkipInput?.checked ?? true,
       autoDismissPopup: autoDismissPopupInput?.checked ?? true,
       preferredQuality: 1080
@@ -90,6 +93,7 @@ document.addEventListener("DOMContentLoaded", () => {
   };
   gridBypassInput?.addEventListener("change", saveSettings);
   lowLatencyModeInput?.addEventListener("change", saveSettings);
+  chatLatencyDisplayInput?.addEventListener("change", saveSettings);
   autoAdSkipInput?.addEventListener("change", saveSettings);
   autoDismissPopupInput?.addEventListener("change", saveSettings);
 });

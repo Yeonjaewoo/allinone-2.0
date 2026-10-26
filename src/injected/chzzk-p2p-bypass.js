@@ -93,6 +93,7 @@
   const CLEAN_SETTINGS = {
     gridBypassEnabled: true,
     lowLatencyMode: true,
+    chatLatencyDisplay: true,
     autoAdSkip: true,
     autoDismissPopup: true,
   };
@@ -2513,6 +2514,107 @@
     });
   }
 
+  // [ChzzkClean] 채팅 입력창 실시간 지연시간/버퍼 표시 엔진
+  function installChatLatencyDisplayEngine() {
+    const updateLatencyBadge = () => {
+      const isLive = /^\/live\/[a-f0-9]{32}(?:\/|$)/i.test(root.location?.pathname ?? "");
+      const existingBadge = root.document?.getElementById("chzzk-clean-chat-latency");
+
+      if (!isLive || !CLEAN_SETTINGS.chatLatencyDisplay) {
+        if (existingBadge) existingBadge.remove();
+        return;
+      }
+
+      // 채팅 입력창 컨테이너 탐색
+      const inputContainer =
+        root.document?.querySelector('[class*="live_chatting_input_container"]') ||
+        root.document?.querySelector('[class*="chatting_input_area"]') ||
+        root.document?.querySelector('[class*="live_chatting_input_box"]') ||
+        root.document?.querySelector('form:has(textarea[placeholder*="채팅"])') ||
+        root.document?.querySelector('div:has(> textarea[placeholder*="채팅"])') ||
+        root.document?.querySelector('div:has(> [contenteditable="true"])') ||
+        root.document?.querySelector('[class*="live_chatting_input"]');
+
+      if (!inputContainer) return;
+
+      if (root.getComputedStyle(inputContainer).position === "static") {
+        inputContainer.style.position = "relative";
+      }
+
+      let badge = existingBadge;
+      if (!badge) {
+        badge = root.document.createElement("div");
+        badge.id = "chzzk-clean-chat-latency";
+        badge.style.cssText = `
+          position: absolute;
+          top: -22px;
+          right: 4px;
+          font-size: 11px;
+          font-weight: 600;
+          color: rgba(255, 255, 255, 0.5);
+          background: rgba(0, 0, 0, 0.45);
+          padding: 2px 7px;
+          border-radius: 4px;
+          user-select: none;
+          pointer-events: none;
+          white-space: nowrap;
+          letter-spacing: -0.02em;
+          z-index: 10;
+          backdrop-filter: blur(4px);
+          transition: color 0.2s ease;
+        `;
+        inputContainer.appendChild(badge);
+      }
+
+      const video = root.document?.querySelector("video");
+      if (!video || !video.isConnected) {
+        badge.textContent = "지연: 대기 중...";
+        badge.style.color = "rgba(255, 255, 255, 0.4)";
+        return;
+      }
+      if (video.paused) {
+        badge.textContent = "지연: 일시정지됨";
+        badge.style.color = "rgba(255, 255, 255, 0.4)";
+        return;
+      }
+
+      let latency = -1;
+      let buffer = 0;
+
+      if (video.seekable && video.seekable.length > 0) {
+        const liveEnd = video.seekable.end(video.seekable.length - 1);
+        latency = Math.max(0, liveEnd - video.currentTime);
+      }
+
+      if (video.buffered && video.buffered.length > 0) {
+        for (let i = 0; i < video.buffered.length; i++) {
+          const start = video.buffered.start(i);
+          const end = video.buffered.end(i);
+          if (video.currentTime >= start && video.currentTime <= end) {
+            buffer = Math.max(0, end - video.currentTime);
+            break;
+          }
+        }
+      }
+
+      if (latency >= 0) {
+        badge.textContent = `지연: ${latency.toFixed(2)}s (버퍼 ${buffer.toFixed(1)}s)`;
+        if (latency < 2.5) {
+          badge.style.color = "#00ffa3"; // 양호 (민트)
+        } else if (latency < 4.0) {
+          badge.style.color = "#ffb800"; // 보통 (노랑)
+        } else {
+          badge.style.color = "#ff5555"; // 지연 심함 (빨강)
+        }
+      } else {
+        badge.textContent = "지연: 측정 중...";
+        badge.style.color = "rgba(255, 255, 255, 0.4)";
+      }
+    };
+
+    root.setInterval(updateLatencyBadge, 500);
+  }
+
   function hasAdMediaSource(video, source = video.currentSrc || video.src) {
     if (!source || source.startsWith("blob:")) {
       return false;
@@ -4654,6 +4756,7 @@
     installEarlyStyle();
     installPopupDismissObserver();
     installLowLatencyEngine();
+    installChatLatencyDisplayEngine();
     const lastSource = new WeakMap();
     const advancedSource = new WeakMap();
     const advanceBindings = new WeakMap();
