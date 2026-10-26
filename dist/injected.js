@@ -2443,13 +2443,16 @@
   // [ChzzkClean] 저지연 모드 엔진 (네이티브 저지연 활성화 + Live Edge Chaser)
   function installLowLatencyEngine() {
     let lastAppliedState = null;
+    let lastRoute = currentPlaybackRoute();
+    let lastRouteChangeTime = root.performance?.now?.() ?? Date.now();
+    let lastJumpTime = 0;
+    const videoInitTimes = new WeakMap();
 
     const syncNativeLowLatency = () => {
       const isLive = /^\/live\/[a-f0-9]{32}(?:\/|$)/i.test(root.location?.pathname ?? "");
       if (!isLive) return;
 
       const targetState = !!CLEAN_SETTINGS.lowLatencyMode;
-      if (lastAppliedState === targetState) return;
 
       try {
         const playerEl =
@@ -2458,12 +2461,26 @@
           document.querySelector('[class*="live_player"]');
         const store = root.__STORE__ || playerEl?.__vue__?.$store;
         if (store?.state) {
-          store.dispatch?.("setLowLatency", targetState).catch?.(() => {});
-          store.dispatch?.("updatePlayerState", { lowLatencyEnabled: targetState, lowLatency: targetState }).catch?.(() => {});
-          store.commit?.("setLowLatency", targetState);
-          store.commit?.("updatePlayerState", { lowLatencyEnabled: targetState, lowLatency: targetState });
+          // 치지직 플레이어 스토어의 현재 저지연 설정값 확인
+          const currentStoreState =
+            store.state.player?.lowLatencyEnabled ??
+            store.state.lowLatencyEnabled ??
+            store.state.player?.lowLatency ??
+            store.state.lowLatency;
+
+          // 이미 스토어에 타겟 상태가 적용되어 있다면 불필요한 재호출(스트림 재연결 유발) 방지
+          if (currentStoreState === targetState && lastAppliedState === targetState) {
+            return;
+          }
+
+          if (currentStoreState !== targetState) {
+            store.dispatch?.("setLowLatency", targetState).catch?.(() => {});
+            store.dispatch?.("updatePlayerState", { lowLatencyEnabled: targetState, lowLatency: targetState }).catch?.(() => {});
+            store.commit?.("setLowLatency", targetState);
+            store.commit?.("updatePlayerState", { lowLatencyEnabled: targetState, lowLatency: targetState });
+            console.info(`${PREFIX} [ChzzkClean] 네이티브 저지연 모드 ${targetState ? "활성화" : "비활성화"}`);
+          }
           lastAppliedState = targetState;
-          console.info(`${PREFIX} [ChzzkClean] 네이티브 저지연 모드 ${targetState ? "활성화" : "비활성화"}`);
         }
       } catch (e) {}
     };
@@ -2473,11 +2490,28 @@
       const isLive = /^\/live\/[a-f0-9]{32}(?:\/|$)/i.test(root.location?.pathname ?? "");
       if (!isLive) return;
 
+      const now = root.performance?.now?.() ?? Date.now();
+      const currentRoute = currentPlaybackRoute();
+      if (currentRoute !== lastRoute) {
+        lastRoute = currentRoute;
+        lastRouteChangeTime = now;
+        lastAppliedState = null;
+      }
+
+      // 새 방송 진입 후 최소 4초간은 강제 시크 및 가속 제어를 유예 (초기 로딩 및 비디오 플레이어 초기화 보호)
+      const routeElapsed = (now - lastRouteChangeTime) / 1000;
+
       const videos = document.querySelectorAll("video");
       for (const video of videos) {
-        if (!video.isConnected || video.paused || video.ended || isAuxiliaryVideo(video)) {
+        if (!video.isConnected || video.paused || video.ended || video.seeking || isAuxiliaryVideo(video)) {
           continue;
         }
+
+        // 비디오별 초기 재생 시작 시간 등록
+        if (!videoInitTimes.has(video)) {
+          videoInitTimes.set(video, now);
+        }
+        const videoElapsed = (now - (videoInitTimes.get(video) || now)) / 1000;
 
         if (video.seekable && video.seekable.length > 0) {
           const liveEnd = video.seekable.end(video.seekable.length - 1);
@@ -2498,10 +2532,26 @@
             const target = typeof CLEAN_SETTINGS.targetLatency === "number" ? CLEAN_SETTINGS.targetLatency : 2.0;
             const diff = latency - target;
 
+            // [핵심 가드] 비디오가 초기 로딩 중이거나 아직 충분히 재생되지 않은 시점에는 시크 및 가속 금지
+            // - 방송 진입 후 4초 미만
+            // - 비디오 재생 지속 시간 3.5초 미만 (video.currentTime < 3.5)
+            // - 버퍼 준비 상태 부족 (video.readyState < 3)
+            const isInitialBuffering = routeElapsed < 4.0 || videoElapsed < 3.5 || video.currentTime < 3.5 || video.readyState < 3;
+
+            if (isInitialBuffering) {
+              // 초기 로딩 중에는 플레이어 기본 재생(1.0x)에 맡김
+              if (video.playbackRate !== 1.0) video.playbackRate = 1.0;
+              continue;
+            }
+
             // 1) 지연이 10초 이상 크게 누적된 경우 (버퍼링/일시정지 복구 후):
             // 무작정 끝으로 가지 않고 사용자가 지정한 목표 지연시간 위치로 점프!
-            if (diff > 10.0) {
+            // 단, 마지막 점프 후 8초간 쿨다운 유지 (반복 점프 스톨 방지)
+            const jumpCooldownElapsed = (now - lastJumpTime) / 1000;
+            if (diff > 10.0 && jumpCooldownElapsed > 8.0 && liveEnd - target > 0) {
+              lastJumpTime = now;
               video.currentTime = Math.max(0, liveEnd - target);
+              console.info(`${PREFIX} [ChzzkClean] 큰 지연 누적 감지(${diff.toFixed(1)}s) -> 목표 지연 위치(${target}s)로 싱크 점프`);
             }
             // 2) 버퍼가 너무 적으면(1.0초 미만) 가속 시 버퍼링이 발생하므로 즉시 1.0배속으로 버퍼 충전!
             else if (forwardBuffer < 1.0) {
@@ -2532,10 +2582,14 @@
       traceLiveLatency();
     }, 1000);
 
-    root.addEventListener("popstate", () => {
+    const onRouteOrStateChange = () => {
+      lastRouteChangeTime = root.performance?.now?.() ?? Date.now();
+      lastRoute = currentPlaybackRoute();
       lastAppliedState = null;
-      root.setTimeout(syncNativeLowLatency, 400);
-    });
+      root.setTimeout(syncNativeLowLatency, 500);
+    };
+
+    root.addEventListener("popstate", onRouteOrStateChange);
   }
 
   // [ChzzkClean] 채팅 입력창 실시간 지연시간/버퍼 표시 엔진
