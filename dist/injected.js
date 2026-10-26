@@ -149,8 +149,65 @@ class GridBypass {
     if (window.__CHZZK_CLEAN_GRID_BYPASS_INSTALLED__) return;
     window.__CHZZK_CLEAN_GRID_BYPASS_INSTALLED__ = true;
     this.emulateMacPlatform();
+    this.mockNaverPlugin();
     this.startPlayerPolling();
     console.info("[ChzzkClean] 그리드 우회 및 1080p 고화질 고정 엔진 활성화 완료");
+  }
+  /**
+   * 치지직이 네이버 동영상 플러그인(ooadnieabchijkibjpeieeliohjidnjj)을
+   * chrome.runtime.sendMessage로 검사할 때 "정상 설치됨"으로 응답을 가로챕니다.
+   */
+  static mockNaverPlugin() {
+    try {
+      const pluginId = "ooadnieabchijkibjpeieeliohjidnjj";
+      const wChrome = window.chrome;
+      if (!wChrome) return;
+      if (!wChrome.runtime) {
+        wChrome.runtime = {};
+      }
+      const origSendMessage = wChrome.runtime.sendMessage;
+      wChrome.runtime.sendMessage = function(...args) {
+        const targetId = args[0];
+        if (typeof targetId === "string" && targetId.includes(pluginId)) {
+          console.info("[ChzzkClean] 네이버 플러그인 체크 가로채기 -> 설치 완료로 위장");
+          const callback = typeof args[args.length - 1] === "function" ? args[args.length - 1] : null;
+          const mockRes = {
+            installed: true,
+            running: true,
+            status: "RUNNING",
+            version: "2.1.0",
+            success: true
+          };
+          if (callback) {
+            setTimeout(() => callback(mockRes), 0);
+            return;
+          }
+          return Promise.resolve(mockRes);
+        }
+        return origSendMessage ? origSendMessage.apply(this, args) : Promise.resolve();
+      };
+      const origConnect = wChrome.runtime.connect;
+      wChrome.runtime.connect = function(...args) {
+        const targetId = args[0];
+        if (typeof targetId === "string" && targetId.includes(pluginId)) {
+          console.info("[ChzzkClean] 네이버 플러그인 connect 포트 가로채기");
+          return {
+            name: "mock-nlive-port",
+            onMessage: { addListener: () => {
+            } },
+            onDisconnect: { addListener: () => {
+            } },
+            postMessage: () => {
+            },
+            disconnect: () => {
+            }
+          };
+        }
+        return origConnect ? origConnect.apply(this, args) : null;
+      };
+    } catch (e) {
+      console.warn("[ChzzkClean] 플러그인 모킹 중 예외:", e.message);
+    }
   }
   /**
    * 윈도우 환경에서 네이버 동영상 플러그인(웹스토어) 설치 강제를 우회하기 위해
@@ -344,6 +401,7 @@ class PopupDismiss {
 (() => {
   try {
     GridBypass.emulateMacPlatform();
+    GridBypass.mockNaverPlugin();
     AdInterceptor.install();
     GridBypass.install();
     PopupDismiss.install();
