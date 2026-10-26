@@ -1,0 +1,63 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8">
+  <title>치지직 클린</title>
+  <script type="module" crossorigin src="/popup.js"></script>
+  <link rel="modulepreload" crossorigin href="/chunks/chzzk.js">
+  <link rel="stylesheet" crossorigin href="/assets/popup.css">
+</head>
+<body>
+  <div class="container">
+    <header class="header">
+      <div class="logo-area">
+        <span class="logo-text">치지직 클린</span>
+        <span class="version">v2.0</span>
+      </div>
+      <div class="status-badge active">
+        <span class="status-dot"></span>
+        <span class="status-text">작동 중</span>
+      </div>
+    </header>
+
+    <div class="card">
+      <div class="item">
+        <div class="item-info">
+          <span class="title">1080p 화질 고정</span>
+          <span class="desc">그리드 팝업 없이 최고 화질 자동 유지</span>
+        </div>
+        <label class="switch">
+          <input type="checkbox" id="gridBypass" checked>
+          <span class="slider"></span>
+        </label>
+      </div>
+
+      <div class="item">
+        <div class="item-info">
+          <span class="title">동영상 광고 스킵</span>
+          <span class="desc">안티-애드블록 감지 없는 무광고 시청</span>
+        </div>
+        <label class="switch">
+          <input type="checkbox" id="autoAdSkip" checked>
+          <span class="slider"></span>
+        </label>
+      </div>
+
+      <div class="item">
+        <div class="item-info">
+          <span class="title">방해 팝업 자동 제거</span>
+          <span class="desc">경고/설치 팝업 즉시 닫기 & 자동 재생</span>
+        </div>
+        <label class="switch">
+          <input type="checkbox" id="autoDismissPopup" checked>
+          <span class="slider"></span>
+        </label>
+      </div>
+    </div>
+
+    <footer class="footer">
+      <span>깔끔하고 쾌적한 치지직 시청 경험</span>
+    </footer>
+  </div>
+</body>
+</html>
