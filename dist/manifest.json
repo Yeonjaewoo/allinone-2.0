@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "치지직 클린 (Chzzk Clean)",
-  "version": "2.0.2",
+  "version": "2.0.3",
   "description": "치지직 그리드(P2P) 우회, 광고 차단, 안티 애드블록 무력화 및 1080p 고화질 시청",
   "permissions": ["storage", "tabs"],
   "host_permissions": [

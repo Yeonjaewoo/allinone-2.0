@@ -1,11 +1,11 @@
 {
   "name": "chzzk-clean",
-  "version": "2.0.2",
+  "version": "2.0.3",
   "description": "치지직 광고 및 그리드 팝업 차단, 1080p 고화질 자동 고정 클린 확장프로그램",
   "type": "module",
   "scripts": {
     "dev": "vite build --watch",
-    "build": "tsc && vite build && cp src/injected/chzzk-p2p-bypass.js dist/injected.js && cp update.bat dist/update.bat",
+    "build": "tsc && vite build && cp src/injected/chzzk-p2p-bypass.js dist/injected.js && cp update.bat dist/update.bat && cp update.ps1 dist/update.ps1",
     "release": "./scripts/release.sh"
   },
   "devDependencies": {

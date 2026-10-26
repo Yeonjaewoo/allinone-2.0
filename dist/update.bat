@@ -1,9 +1,19 @@
 @echo off
 setlocal
-chcp 65001 >nul
-title 치지직 클린 (Chzzk Clean) 자동 업데이트
+title 치지직 클린 자동 업데이트
+cd /d "%~dp0"
 
-powershell -NoProfile -ExecutionPolicy Bypass -Command "$ErrorActionPreference = 'Stop'; [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12; $dir = '%~dp0'; Write-Host '========================================================' -ForegroundColor Cyan; Write-Host '   치지직 클린 (Chzzk Clean) 자동 업데이트' -ForegroundColor Cyan; Write-Host '========================================================' -ForegroundColor Cyan; Write-Host ''; try { Write-Host '[*] GitHub에서 최신 버전을 다운로드하고 있습니다...' -ForegroundColor Yellow; $zip = Join-Path $env:TEMP 'chzzk_update.zip'; $dest = Join-Path $env:TEMP 'chzzk_temp'; if (Test-Path $zip) { Remove-Item $zip -Force -ErrorAction SilentlyContinue }; if (Test-Path $dest) { Remove-Item $dest -Recurse -Force -ErrorAction SilentlyContinue }; Invoke-WebRequest -Uri 'https://github.com/Yeonjaewoo/allinone-2.0/archive/refs/heads/main.zip' -OutFile $zip -UseBasicParsing; Write-Host '[*] 압축 해제 및 파일 동기화 중...' -ForegroundColor Yellow; Expand-Archive -Path $zip -DestinationPath $dest -Force; $src = Join-Path $dest 'allinone-2.0-main\dist'; if (Test-Path (Join-Path $dir 'manifest.json')) { Copy-Item -Path (Join-Path $src '*') -Destination $dir -Recurse -Force } else { $target = Join-Path $dir 'dist'; if (-not (Test-Path $target)) { New-Item -ItemType Directory -Path $target | Out-Null }; Copy-Item -Path (Join-Path $src '*') -Destination $target -Recurse -Force; Copy-Item -Path (Join-Path $dest 'allinone-2.0-main\update.bat') -Destination (Join-Path $dir 'update.bat') -Force }; Remove-Item $zip -Force -ErrorAction SilentlyContinue; Remove-Item $dest -Recurse -Force -ErrorAction SilentlyContinue; Write-Host ''; Write-Host '========================================================' -ForegroundColor Green; Write-Host '  [성공] 치지직 클린 업데이트가 완료되었습니다!' -ForegroundColor Green; Write-Host ''; Write-Host '  크롬(chrome://extensions)에서 [새로고침 🔄]을 클릭하세요.' -ForegroundColor White; Write-Host '========================================================' -ForegroundColor Green; } catch { Write-Host ''; Write-Host '========================================================' -ForegroundColor Red; Write-Host '  [실패] 업데이트 중 오류 발생: ' $_.Exception.Message -ForegroundColor Red; Write-Host '  인터넷 연결을 확인하고 다시 실행해 주세요.' -ForegroundColor DarkYellow; Write-Host '========================================================' -ForegroundColor Red; }"
+echo ========================================================
+echo   치지직 클린 (Chzzk Clean) 자동 업데이트
+echo ========================================================
+echo.
+
+if not exist "update.ps1" (
+    echo [*] 업데이트 스크립트를 다운로드하는 중...
+    powershell -NoProfile -ExecutionPolicy Bypass -Command "[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12; (New-Object System.Net.WebClient).DownloadFile('https://raw.githubusercontent.com/Yeonjaewoo/allinone-2.0/main/update.ps1', 'update.ps1')"
+)
+
+powershell -NoProfile -ExecutionPolicy Bypass -File "update.ps1"
 
 echo.
 pause

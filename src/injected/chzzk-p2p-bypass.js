@@ -3287,6 +3287,7 @@
         .map((item) => `${item.id}:${item.label}:${item.kind}`)
         .join("|");
       entry.qualityTracks = tracks;
+      entry.userManualQuality = true;
       entry.intent.quality = false;
     };
     const restore = (entry) => {
@@ -3326,7 +3327,11 @@
       if (entry.video.paused || entry.video.playbackRate === 0) return;
       const tracks = Array.from(entry.api.videoTracks ?? []);
       if (!tracks.length) return;
-      const quality = readPlayerPreferences().quality[entry.type];
+      let quality = readPlayerPreferences().quality[entry.type];
+      if (CLEAN_SETTINGS.gridBypassEnabled && !entry.userManualQuality) {
+        // 1080p 고정 옵션 활성화 시 새 방송 진입마다 최고 화질(1080p) 자동 고정
+        quality = { mode: "fixed", resolution: 1080 };
+      }
       const signature = tracks
         .map((track) => `${track.id}:${track.label}:${track.kind}`)
         .join("|");
