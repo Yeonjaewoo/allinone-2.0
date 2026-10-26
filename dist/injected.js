@@ -2477,7 +2477,6 @@
     let lastAppliedState = null;
     let lastRoute = currentPlaybackRoute();
     let lastJumpTime = 0;
-    const initialSyncedVideos = new WeakSet();
 
     const getPlayerStore = () => {
       try {
@@ -2521,7 +2520,7 @@
     };
     syncNativeLowLatencyFn = syncNativeLowLatency;
 
-    // 실시간 버퍼 지연 추적 및 복구 (v2.0.7 기반 개선)
+    // 실시간 버퍼 지연 추적 및 스마트 배속 제어 엔진 (스마트 체이서)
     const traceLiveLatency = () => {
       const isLive = /^\/live\/[a-f0-9]{32}(?:\/|$)/i.test(root.location?.pathname ?? "");
       if (!isLive) return;
@@ -2558,51 +2557,49 @@
 
           if (CLEAN_SETTINGS.lowLatencyMode) {
             const target = typeof CLEAN_SETTINGS.targetLatency === "number" ? CLEAN_SETTINGS.targetLatency : 2.0;
-            const diff = rawLatency - target;
+            const diff = rawLatency - target; // 양수: 목표보다 뒤처짐(지연 큼), 음수: 목표보다 앞섬(지연 작음)
 
-            // 1) [문제 1 해결: 방송 진입 초기 라이브 싱크]
-            // 비디오 로드 극초반(0.1초~0.3초)에 딱 1회 라이브 엣지로 즉시 안착시켜
-            // 과거 15초/30초 버퍼에 머무르지 않고 처음부터 실시간(목표 지연시간) 위치에서 재생 시작
-            if (!initialSyncedVideos.has(video) && video.readyState >= 2) {
-              initialSyncedVideos.add(video);
-              triggerGoLive();
-              if (liveEnd > target && Math.abs(liveEnd - target - video.currentTime) > 3.0) {
-                video.currentTime = Math.max(0, liveEnd - target);
-              }
-              continue;
-            }
+            // 1) [원인 1 해결: 방송 진입 초기 강제 시크 전면 제거]
+            // 진입 초기 강제 currentTime 점프를 일절 하지 않고 치지직 플레이어가 자체 버퍼로 부드럽게 시작하도록 허용!
 
-            // 2) [심각한 지연 누적(10초 이상) 복구]
-            // 장시간 일시정지 등으로 10초 이상 벌어졌을 때만 안전 싱크 점프 (쿨다운 12초)
+            // 2) [극심한 지연 누적(15초 이상) 장시간 방치 복구]
+            // 백그라운드 탭 방치나 일시정지 후 재생 등으로 15초 이상 심각하게 벌어졌을 때만 안전 싱크 점프 (쿨다운 15초)
             const jumpCooldownElapsed = (now - lastJumpTime) / 1000;
-            if (diff > 10.0 && jumpCooldownElapsed > 12.0 && liveEnd > target + 2.0) {
+            if (diff > 15.0 && jumpCooldownElapsed > 15.0 && video.currentTime > 5.0 && liveEnd > target + 2.0) {
               lastJumpTime = now;
               triggerGoLive();
               video.currentTime = Math.max(0, liveEnd - target);
-              console.info(`${PREFIX} [ChzzkClean] 큰 지연 누적 복구 -> 목표 위치(${target}s)로 싱크`);
+              console.info(`${PREFIX} [ChzzkClean] 극심한 지연 누적 복구 -> 목표 위치(${target}s)로 싱크`);
               continue;
             }
 
-            // 3) [문제 2 해결: 0.2초 당겨짐 및 방송 로딩 완벽 방어 안전 가드]
-            // ★ 핵심 가드 1: 전방 버퍼가 1.5초 이하로 줄어들거나, 지연시간이 1.3초 이하로 너무 바짝 붙으면:
-            // 무조건 0.95배속으로 감속하여 안전 버퍼(2.0초 이상)를 최우선 확보! (버퍼 고갈 버퍼링 원천 차단)
-            if (rawLatency < 1.3 || forwardBuffer < 1.4) {
+            // 3) [원인 2 해결: 4~5초 밀림 방지 스마트 체이서 & 버퍼 가드]
+            // A. 버퍼 고갈 초밀착 위험 가드 (지연 1.0초 미만 또는 잔여 버퍼 0.6초 미만 위기)
+            // 지연이 1.0초 이하로 너무 바짝 붙을 때만 0.95배속으로 안전하게 감속
+            if (rawLatency < 1.0 || (rawLatency < target && forwardBuffer < 0.6)) {
               if (video.playbackRate !== 0.95) video.playbackRate = 0.95;
             }
-            // ★ 핵심 가드 2: 목표치 안정 데드존 (target ± 0.4s, 예: 1.6s ~ 2.4s): 정상 1.00배속 유지 (가속 절대 금지!)
-            else if (Math.abs(diff) <= 0.4) {
-              if (video.playbackRate !== 1.0) video.playbackRate = 1.0;
-            }
-            // ★ 핵심 가드 3: 목표치보다 뒤처졌을 때(diff > 0.4s) & 전방 버퍼가 충분할 때(>= 1.8s):
-            // 버퍼를 급격히 갉아먹지 않도록 1.03배속(3% 가속)까지만 부드럽게 허용!
-            else if (diff > 0.4 && forwardBuffer >= 1.8) {
-              if (video.playbackRate !== 1.03) video.playbackRate = 1.03;
-            }
-            // ★ 핵심 가드 4: 목표치보다 앞서있을 때(diff < -0.4s): 0.97배속으로 감속하여 목표치로 복귀
+            // B. 목표치보다 앞섰을 때 (예: target 2.0초인데 1.0s ~ 1.6s 사이)
+            // 0.97배속으로 부드럽게 감속하여 목표치로 복귀
             else if (diff < -0.4) {
               if (video.playbackRate !== 0.97) video.playbackRate = 0.97;
             }
-            // 기본 정상 배속
+            // C. 목표 안정 데드존 (target ± 0.35s, 예: 1.65s ~ 2.35s)
+            // 정상 1.00배속 유지 (가속/감속 절대 금지)
+            else if (Math.abs(diff) <= 0.35) {
+              if (video.playbackRate !== 1.0) video.playbackRate = 1.0;
+            }
+            // D. 지연이 3초 이상으로 크게 밀렸을 때 (diff > 1.0s)
+            // 전방 버퍼가 0.8초 이상 확보되어 있으면 1.07배속으로 시원하게 당겨 4~5초 밀림 완벽 차단!
+            else if (diff > 1.0 && forwardBuffer >= 0.8) {
+              if (video.playbackRate !== 1.07) video.playbackRate = 1.07;
+            }
+            // E. 지연이 살짝 뒤처졌을 때 (0.35s < diff <= 1.0s, 예: 지연 2.35s ~ 3.0s)
+            // 1.03배속으로 부드럽게 목표치에 안착
+            else if (diff > 0.35 && forwardBuffer >= 0.8) {
+              if (video.playbackRate !== 1.03) video.playbackRate = 1.03;
+            }
+            // F. 기본 정상 배속
             else {
               if (video.playbackRate !== 1.0) video.playbackRate = 1.0;
             }
@@ -2693,11 +2690,10 @@
         return;
       }
 
-      // [문제 1 해결: 초기 30초 노출 방지 마스킹]
-      // 비디오가 아직 로딩 중이거나 첫 재생 프레임에 도달하지 않은 초기에는 30초 대신 "실시간 연결 중..."으로 마스킹
-      if (video.readyState < 3 || video.currentTime < 0.5 || video.seeking) {
-        badge.textContent = "지연: 실시간 연결 중...";
-        badge.style.color = "rgba(255, 255, 255, 0.5)";
+      // 비디오가 재생 시작되기 전 초기 로딩 상태 마스킹
+      if (video.readyState < 2 || video.currentTime < 0.3) {
+        badge.textContent = "지연: 측정 중...";
+        badge.style.color = "rgba(255, 255, 255, 0.4)";
         return;
       }
 
