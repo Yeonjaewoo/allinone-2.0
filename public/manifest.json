@@ -1,31 +1,28 @@
 {
   "manifest_version": 3,
   "name": "치지직 클린 (Chzzk Clean)",
-  "version": "2.0.0",
-  "description": "광고 팝업 차단, 그리드 우회 및 1080p 고화질 자동 선택",
+  "version": "2.1.3",
+  "description": "치지직 그리드(P2P) 우회, 광고 차단, 안티 애드블록 무력화 및 1080p 고화질 시청",
   "permissions": ["storage"],
   "host_permissions": [
-    "*://chzzk.naver.com/*",
+    "https://chzzk.naver.com/*",
+    "https://*.chzzk.naver.com/*",
+    "https://m.naver.com/shorts/*",
     "https://api.chzzk.naver.com/*",
-    "https://*.naver.com/*"
+    "https://*.pstatic.net/*",
+    "https://*.navercdn.com/*"
   ],
-  "background": {
-    "service_worker": "background.js",
-    "type": "module"
-  },
   "content_scripts": [
     {
-      "matches": ["*://chzzk.naver.com/*"],
+      "matches": [
+        "https://chzzk.naver.com/*",
+        "https://*.chzzk.naver.com/*",
+        "https://m.naver.com/shorts/*"
+      ],
       "js": ["injected.js"],
       "run_at": "document_start",
       "world": "MAIN",
       "all_frames": true
-    }
-  ],
-  "web_accessible_resources": [
-    {
-      "matches": ["*://chzzk.naver.com/*"],
-      "resources": ["injected.js", "icons/*"]
     }
   ],
   "action": {
