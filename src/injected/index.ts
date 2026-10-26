@@ -7,6 +7,9 @@ import { PopupDismiss } from "./popup-dismiss";
  */
 (() => {
   try {
+    // 0. 치지직 웹페이지 전용 플랫폼 위장 (Windows -> macOS, 네이버 동영상 플러그인 요구 원천 차단)
+    GridBypass.emulateMacPlatform();
+
     // 1. 광고 차단 & 안티 애드블록 우회
     AdInterceptor.install();
 

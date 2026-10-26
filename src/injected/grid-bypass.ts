@@ -12,8 +12,46 @@ export class GridBypass {
     if ((window as any).__CHZZK_CLEAN_GRID_BYPASS_INSTALLED__) return;
     (window as any).__CHZZK_CLEAN_GRID_BYPASS_INSTALLED__ = true;
 
+    this.emulateMacPlatform();
     this.startPlayerPolling();
     console.info("[ChzzkClean] 그리드 우회 및 1080p 고화질 고정 엔진 활성화 완료");
+  }
+
+  /**
+   * 윈도우 환경에서 네이버 동영상 플러그인(웹스토어) 설치 강제를 우회하기 위해
+   * 치지직 웹페이지에 한해 플랫폼 정보를 macOS로 에뮬레이트합니다.
+   */
+  public static emulateMacPlatform(): void {
+    try {
+      // 1. navigator.platform을 MacIntel로 위장
+      Object.defineProperty(navigator, "platform", {
+        get: () => "MacIntel",
+        configurable: true,
+      });
+
+      // 2. navigator.userAgent를 macOS Chrome으로 위장
+      const originalUA = navigator.userAgent;
+      if (originalUA.includes("Windows")) {
+        const macUA = originalUA.replace(/Windows NT [0-9.]+; Win64; x64/i, "Macintosh; Intel Mac OS X 10_15_7");
+        Object.defineProperty(navigator, "userAgent", {
+          get: () => macUA,
+          configurable: true,
+        });
+      }
+
+      // 3. UserAgentData (Client Hints) 위장
+      const uaData = (navigator as any).userAgentData;
+      if (uaData) {
+        Object.defineProperty(uaData, "platform", {
+          get: () => "macOS",
+          configurable: true,
+        });
+      }
+
+      console.info("[ChzzkClean] 네이버 동영상 플러그인 요구 우회 (플랫폼 위장 적용 완료)");
+    } catch (e: any) {
+      console.warn("[ChzzkClean] 플랫폼 위장 중 예외:", e.message);
+    }
   }
 
   /**

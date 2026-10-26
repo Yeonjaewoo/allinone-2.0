@@ -85,12 +85,7 @@ export class AdInterceptor {
           const json = await clone.json();
 
           if (json?.content) {
-            if (json.content.playerAdDisplayResponse) {
-              json.content.playerAdDisplayResponse.preRoll = false;
-              json.content.playerAdDisplayResponse.midRoll = false;
-            }
-            json.content.skipPreRollAd = true;
-            json.content.dab = false;
+            AdInterceptor.cleanPlaybackData(json.content);
           }
 
           return new Response(JSON.stringify(json), {
@@ -105,6 +100,36 @@ export class AdInterceptor {
 
       return response;
     };
+  }
+
+  /**
+   * 광고 플래그 제거 및 P2P(그리드) 강제 비활성화
+   */
+  private static cleanPlaybackData(content: any): void {
+    if (!content) return;
+
+    if (content.playerAdDisplayResponse) {
+      content.playerAdDisplayResponse.preRoll = false;
+      content.playerAdDisplayResponse.midRoll = false;
+    }
+    content.skipPreRollAd = true;
+    content.dab = false;
+
+    // livePlaybackJson 내의 p2p 설정을 false로 변조하여 플러그인 요구 원천 차단
+    if (content.livePlaybackJson) {
+      try {
+        const playback =
+          typeof content.livePlaybackJson === "string"
+            ? JSON.parse(content.livePlaybackJson)
+            : content.livePlaybackJson;
+        if (playback) {
+          playback.p2p = false;
+          delete playback.p2pQuality;
+          delete playback.p2pUrl;
+          content.livePlaybackJson = JSON.stringify(playback);
+        }
+      } catch {}
+    }
   }
 
   private static hookXHR(): void {
@@ -139,12 +164,7 @@ export class AdInterceptor {
             if (raw) {
               const data = JSON.parse(raw);
               if (data?.content) {
-                if (data.content.playerAdDisplayResponse) {
-                  data.content.playerAdDisplayResponse.preRoll = false;
-                  data.content.playerAdDisplayResponse.midRoll = false;
-                }
-                data.content.skipPreRollAd = true;
-                data.content.dab = false;
+                AdInterceptor.cleanPlaybackData(data.content);
               }
               const modified = JSON.stringify(data);
               Object.defineProperty(this, "responseText", { get: () => modified });

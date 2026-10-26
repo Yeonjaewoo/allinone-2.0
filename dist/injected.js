@@ -62,12 +62,7 @@ class AdInterceptor {
           const clone = response.clone();
           const json = await clone.json();
           if (json?.content) {
-            if (json.content.playerAdDisplayResponse) {
-              json.content.playerAdDisplayResponse.preRoll = false;
-              json.content.playerAdDisplayResponse.midRoll = false;
-            }
-            json.content.skipPreRollAd = true;
-            json.content.dab = false;
+            AdInterceptor.cleanPlaybackData(json.content);
           }
           return new Response(JSON.stringify(json), {
             status: response.status,
@@ -80,6 +75,30 @@ class AdInterceptor {
       }
       return response;
     };
+  }
+  /**
+   * 광고 플래그 제거 및 P2P(그리드) 강제 비활성화
+   */
+  static cleanPlaybackData(content) {
+    if (!content) return;
+    if (content.playerAdDisplayResponse) {
+      content.playerAdDisplayResponse.preRoll = false;
+      content.playerAdDisplayResponse.midRoll = false;
+    }
+    content.skipPreRollAd = true;
+    content.dab = false;
+    if (content.livePlaybackJson) {
+      try {
+        const playback = typeof content.livePlaybackJson === "string" ? JSON.parse(content.livePlaybackJson) : content.livePlaybackJson;
+        if (playback) {
+          playback.p2p = false;
+          delete playback.p2pQuality;
+          delete playback.p2pUrl;
+          content.livePlaybackJson = JSON.stringify(playback);
+        }
+      } catch {
+      }
+    }
   }
   static hookXHR() {
     const originalOpen = XMLHttpRequest.prototype.open;
@@ -107,12 +126,7 @@ class AdInterceptor {
             if (raw) {
               const data = JSON.parse(raw);
               if (data?.content) {
-                if (data.content.playerAdDisplayResponse) {
-                  data.content.playerAdDisplayResponse.preRoll = false;
-                  data.content.playerAdDisplayResponse.midRoll = false;
-                }
-                data.content.skipPreRollAd = true;
-                data.content.dab = false;
+                AdInterceptor.cleanPlaybackData(data.content);
               }
               const modified = JSON.stringify(data);
               Object.defineProperty(this, "responseText", { get: () => modified });
@@ -134,8 +148,39 @@ class GridBypass {
   static install() {
     if (window.__CHZZK_CLEAN_GRID_BYPASS_INSTALLED__) return;
     window.__CHZZK_CLEAN_GRID_BYPASS_INSTALLED__ = true;
+    this.emulateMacPlatform();
     this.startPlayerPolling();
     console.info("[ChzzkClean] 그리드 우회 및 1080p 고화질 고정 엔진 활성화 완료");
+  }
+  /**
+   * 윈도우 환경에서 네이버 동영상 플러그인(웹스토어) 설치 강제를 우회하기 위해
+   * 치지직 웹페이지에 한해 플랫폼 정보를 macOS로 에뮬레이트합니다.
+   */
+  static emulateMacPlatform() {
+    try {
+      Object.defineProperty(navigator, "platform", {
+        get: () => "MacIntel",
+        configurable: true
+      });
+      const originalUA = navigator.userAgent;
+      if (originalUA.includes("Windows")) {
+        const macUA = originalUA.replace(/Windows NT [0-9.]+; Win64; x64/i, "Macintosh; Intel Mac OS X 10_15_7");
+        Object.defineProperty(navigator, "userAgent", {
+          get: () => macUA,
+          configurable: true
+        });
+      }
+      const uaData = navigator.userAgentData;
+      if (uaData) {
+        Object.defineProperty(uaData, "platform", {
+          get: () => "macOS",
+          configurable: true
+        });
+      }
+      console.info("[ChzzkClean] 네이버 동영상 플러그인 요구 우회 (플랫폼 위장 적용 완료)");
+    } catch (e) {
+      console.warn("[ChzzkClean] 플랫폼 위장 중 예외:", e.message);
+    }
   }
   /**
    * 플레이어 인스턴스를 탐색하여 코어를 확보합니다.
@@ -238,7 +283,7 @@ class GridBypass {
 
 class PopupDismiss {
   static AD_BLOCK_PATTERN = /광고\s*차단|애드블록|adblock|광고\s*방해없이|원활한\s*서비스\s*이용을\s*위해/i;
-  static GRID_POPUP_PATTERN = /그리드\s*(프로그램)?\s*(설치|다운로드)|1080p\s*(화질)?\s*시청을\s*위해|고화질\s*시청을\s*위해|p2p/i;
+  static GRID_POPUP_PATTERN = /그리드\s*(프로그램)?\s*(설치|다운로드)|1080p\s*(화질)?\s*시청을\s*위해|고화질\s*시청을\s*위해|동영상\s*플러그인|플러그인\s*(설치|필요)|p2p/i;
   static install() {
     if (window.__CHZZK_CLEAN_POPUP_DISMISS_INSTALLED__) return;
     window.__CHZZK_CLEAN_POPUP_DISMISS_INSTALLED__ = true;
@@ -271,6 +316,9 @@ class PopupDismiss {
           }, 150);
         }
       }
+      if (node.querySelector?.('a[href*="ooadnieabchijkibjpeieeliohjidnjj"]') || node.tagName === "A" && node.href?.includes("ooadnieabchijkibjpeieeliohjidnjj")) {
+        node.style.setProperty("display", "none", "important");
+      }
     };
     const observer = new MutationObserver((mutations) => {
       for (const m of mutations) {
@@ -295,6 +343,7 @@ class PopupDismiss {
 
 (() => {
   try {
+    GridBypass.emulateMacPlatform();
     AdInterceptor.install();
     GridBypass.install();
     PopupDismiss.install();

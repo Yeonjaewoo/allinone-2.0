@@ -6,7 +6,7 @@ export class PopupDismiss {
     /광고\s*차단|애드블록|adblock|광고\s*방해없이|원활한\s*서비스\s*이용을\s*위해/i;
 
   private static readonly GRID_POPUP_PATTERN =
-    /그리드\s*(프로그램)?\s*(설치|다운로드)|1080p\s*(화질)?\s*시청을\s*위해|고화질\s*시청을\s*위해|p2p/i;
+    /그리드\s*(프로그램)?\s*(설치|다운로드)|1080p\s*(화질)?\s*시청을\s*위해|고화질\s*시청을\s*위해|동영상\s*플러그인|플러그인\s*(설치|필요)|p2p/i;
 
   public static install(): void {
     if ((window as any).__CHZZK_CLEAN_POPUP_DISMISS_INSTALLED__) return;
@@ -60,6 +60,11 @@ export class PopupDismiss {
             }
           }, 150);
         }
+      }
+
+      // 웹스토어 플러그인 유도 요소 제거
+      if (node.querySelector?.('a[href*="ooadnieabchijkibjpeieeliohjidnjj"]') || (node.tagName === "A" && (node as HTMLAnchorElement).href?.includes("ooadnieabchijkibjpeieeliohjidnjj"))) {
+        node.style.setProperty("display", "none", "important");
       }
     };
 
