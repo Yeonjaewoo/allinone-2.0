@@ -2441,63 +2441,58 @@
   }
 
   // ========================================================
-  // [ChzzkClean] 실시간 영상 버퍼 지연시간 측정 헬퍼 (올인원 방식 + 스무딩)
+  // [ChzzkClean] 실시간 영상 버퍼 지연시간 측정 헬퍼 (올인원 방식)
   // ========================================================
-  let sharedSmoothedLatency = null;
+  let smoothedLatency = null;
 
   function measureLiveMetrics(video) {
     if (!video || !video.isConnected || video.paused || video.ended) {
-      return { latency: -1, buffer: 0, rawLatency: -1 };
+      return { latency: -1, buffer: 0 };
     }
 
     let forwardBuffer = 0;
+    let latency = -1;
+
     if (video.buffered && video.buffered.length > 0) {
+      const lastBufferedEnd = video.buffered.end(video.buffered.length - 1);
+      latency = Math.max(0, lastBufferedEnd - video.currentTime);
+
       for (let i = 0; i < video.buffered.length; i++) {
-        if (video.currentTime >= video.buffered.start(i) && video.currentTime <= video.buffered.end(i) + 0.1) {
-          forwardBuffer = Math.max(0, video.buffered.end(i) - video.currentTime);
+        const start = video.buffered.start(i);
+        const end = video.buffered.end(i);
+        if (video.currentTime >= start - 0.1 && video.currentTime <= end + 0.1) {
+          forwardBuffer = Math.max(0, end - video.currentTime);
           break;
         }
       }
-    }
-
-    let raw = -1;
-    // 올인원 1.5.1 검증 방식: 현재 수신된 버퍼 끝단과의 시차 (플레이어 라이브 엣지 지연)
-    if (video.buffered && video.buffered.length > 0) {
-      const lastBufferedEnd = video.buffered.end(video.buffered.length - 1);
-      if (lastBufferedEnd >= video.currentTime) {
-        raw = lastBufferedEnd - video.currentTime;
-      }
     } else if (video.seekable && video.seekable.length > 0) {
       const liveEnd = video.seekable.end(video.seekable.length - 1);
-      if (liveEnd >= video.currentTime) {
-        raw = liveEnd - video.currentTime;
-      }
+      latency = Math.max(0, liveEnd - video.currentTime);
     }
 
-    // HLS 청크(1~2초) 도착 주기에 따른 진동(들쭉날쭉) 방지: 지수이동평균(EMA) 필터
-    if (raw >= 0 && raw < 60) {
-      if (sharedSmoothedLatency === null || Math.abs(raw - sharedSmoothedLatency) > 4.0) {
-        sharedSmoothedLatency = raw;
+    // HLS 청크(1~2초) 도착에 따른 계단식 진동 방지: 가벼운 지수이동평균(EMA) 필터
+    if (latency >= 0 && latency < 60) {
+      if (smoothedLatency === null || Math.abs(latency - smoothedLatency) > 3.0) {
+        smoothedLatency = latency;
       } else {
-        sharedSmoothedLatency = sharedSmoothedLatency * 0.8 + raw * 0.2;
+        smoothedLatency = smoothedLatency * 0.75 + latency * 0.25;
       }
-    } else if (raw < 0) {
-      sharedSmoothedLatency = null;
+    } else {
+      smoothedLatency = null;
     }
 
     return {
-      latency: sharedSmoothedLatency !== null ? sharedSmoothedLatency : raw,
-      rawLatency: raw,
+      latency: smoothedLatency !== null ? smoothedLatency : latency,
       buffer: forwardBuffer,
     };
   }
 
-  // [ChzzkClean] 저지연 모드 엔진 (네이티브 저지연 활성화 + 스마트 동적 싱크)
+  // [ChzzkClean] 저지연 모드 엔진 (올인원 1.5.1 순수 네이티브 방식)
+  // 비디오 currentTime 및 playbackRate 임의 조작을 전면 배제하여
+  // 화면 멈춤, 영상 튐, 2초-7초-15초 널뛰기 현상을 원천 방지합니다.
   function installLowLatencyEngine() {
-    let lastAppliedState = null;
+    let lastForcedTarget = null;
     let lastRoute = currentPlaybackRoute();
-    let lastJumpTime = 0;
-    const syncedVideos = new WeakSet();
 
     const getPlayerStore = () => {
       try {
@@ -2511,20 +2506,12 @@
       }
     };
 
-    const triggerGoLive = () => {
-      try {
-        const store = getPlayerStore();
-        if (store?.dispatch) {
-          store.dispatch("goLive").catch?.(() => {});
-        }
-      } catch (e) {}
-    };
-
     const syncNativeLowLatency = () => {
       const isLive = /^\/live\/[a-f0-9]{32}(?:\/|$)/i.test(root.location?.pathname ?? "");
       if (!isLive) return;
 
       const targetState = !!CLEAN_SETTINGS.lowLatencyMode;
+      if (lastForcedTarget === targetState) return;
 
       try {
         const store = getPlayerStore();
@@ -2545,116 +2532,114 @@
             store.commit?.("updatePlayerState", { lowLatencyEnabled: targetState, lowLatency: targetState });
             console.info(`${PREFIX} [ChzzkClean] 네이티브 저지연 모드 ${targetState ? "활성화" : "비활성화"}`);
           }
-          lastAppliedState = targetState;
+          lastForcedTarget = targetState;
         }
       } catch (e) {}
     };
 
-    // 실시간 버퍼 지연 추적 및 비례 동적 싱크
-    const traceLiveLatency = () => {
-      const isLive = /^\/live\/[a-f0-9]{32}(?:\/|$)/i.test(root.location?.pathname ?? "");
-      if (!isLive) return;
-
-      const now = root.performance?.now?.() ?? Date.now();
+    // 1초 주기로 스토어 상태 유지 확인 (영상 자체는 치지직 네이티브 엔진에 100% 위임)
+    root.setInterval(() => {
       const currentRoute = currentPlaybackRoute();
       if (currentRoute !== lastRoute) {
         lastRoute = currentRoute;
-        lastAppliedState = null;
-        sharedSmoothedLatency = null;
-        lastJumpTime = 0;
+        lastForcedTarget = null;
+        smoothedLatency = null;
       }
-
-      const videos = document.querySelectorAll("video");
-      for (const video of videos) {
-        if (!video.isConnected || video.paused || video.ended || isAuxiliaryVideo(video)) {
-          continue;
-        }
-
-        const metrics = measureLiveMetrics(video);
-        if (metrics.latency < 0) continue;
-
-        if (CLEAN_SETTINGS.lowLatencyMode) {
-          const target = typeof CLEAN_SETTINGS.targetLatency === "number" ? CLEAN_SETTINGS.targetLatency : 2.0;
-          const diff = metrics.latency - target;
-          const forwardBuffer = metrics.buffer;
-
-          // 1) [초기 진입 즉시 1회 라이브 싱크 (올인원 방식)]
-          // 비디오가 재생 시작되는 극초반에 버퍼 최신 끝단으로 1회 안착시켜
-          // 치지직 기본 과거 버퍼(15초)에 갇히지 않고 처음부터 실시간(2초대)으로 시작
-          if (!syncedVideos.has(video) && video.readyState >= 2) {
-            syncedVideos.add(video);
-            triggerGoLive();
-            if (video.buffered && video.buffered.length > 0) {
-              const liveEnd = video.buffered.end(video.buffered.length - 1);
-              if (Number.isFinite(liveEnd) && liveEnd > target) {
-                video.currentTime = Math.max(0, liveEnd - target);
-                console.info(`${PREFIX} [ChzzkClean] 방송 초기 라이브 싱크 안착 (목표: ${target}s)`);
-              }
-            }
-            continue;
-          }
-
-          // 2) [심각한 지연 누적(8초 이상) 복구]
-          // 일시정지나 백그라운드 탭으로 8초 이상 크게 뒤처졌을 때 1회 라이브 싱크 (쿨다운 8초)
-          const jumpCooldownElapsed = (now - lastJumpTime) / 1000;
-          if (diff > 8.0 && jumpCooldownElapsed > 8.0) {
-            lastJumpTime = now;
-            triggerGoLive();
-            let liveEnd = 0;
-            if (video.buffered && video.buffered.length > 0) {
-              liveEnd = video.buffered.end(video.buffered.length - 1);
-            } else if (video.seekable && video.seekable.length > 0) {
-              liveEnd = video.seekable.end(video.seekable.length - 1);
-            }
-            if (liveEnd > target) {
-              video.currentTime = Math.max(0, liveEnd - target);
-              console.info(`${PREFIX} [ChzzkClean] 누적 지연 복구 (${diff.toFixed(1)}s -> 목표 ${target}s)`);
-            }
-            continue;
-          }
-
-          // 3) [비례 동적 배속 제어]:
-          // A. 안정 데드존 (목표치 ±0.4s 이내, 예: 1.6s ~ 2.4s): 정상 속도(1.00x) 유지하여 요동 방지!
-          if (Math.abs(diff) <= 0.4) {
-            if (video.playbackRate !== 1.0) video.playbackRate = 1.0;
-          }
-          // B. 중간 지연 (2.0s ~ 8.0s 차이): 1.08배속으로 자연스럽게 따라잡음
-          else if (diff > 2.0 && forwardBuffer >= 1.5) {
-            if (video.playbackRate !== 1.08) video.playbackRate = 1.08;
-          }
-          // C. 미세 지연 (0.4s ~ 2.0s 차이): 1.04배속으로 부드럽게 좁힘
-          else if (diff > 0.4 && forwardBuffer >= 1.2) {
-            if (video.playbackRate !== 1.04) video.playbackRate = 1.04;
-          }
-          // D. 너무 앞서거나 버퍼 고갈 위험 (diff < -0.4s 또는 forwardBuffer < 1.0s): 0.96배속으로 버퍼 보충
-          else if (diff < -0.4 || forwardBuffer < 1.0) {
-            if (video.playbackRate !== 0.96) video.playbackRate = 0.96;
-          }
-          // E. 기본 정상 복구
-          else {
-            if (video.playbackRate !== 1.0) video.playbackRate = 1.0;
-          }
-        } else {
-          // 저지연 모드 OFF 시 정상 배속
-          if (video.playbackRate !== 1.0) video.playbackRate = 1.0;
-        }
-      }
-    };
-
-    root.setInterval(() => {
       syncNativeLowLatency();
-      traceLiveLatency();
     }, 1000);
 
-    const onRouteOrStateChange = () => {
+    root.addEventListener("popstate", () => {
       lastRoute = currentPlaybackRoute();
-      lastAppliedState = null;
-      sharedSmoothedLatency = null;
-      lastJumpTime = 0;
+      lastForcedTarget = null;
+      smoothedLatency = null;
       root.setTimeout(syncNativeLowLatency, 400);
+    });
+  }
+
+  // [ChzzkClean] 채팅 입력창 실시간 지연시간/버퍼 표시 엔진 (올인원 순수 계기판)
+  function installChatLatencyDisplayEngine() {
+    const updateLatencyBadge = () => {
+      const isLive = /^\/live\/[a-f0-9]{32}(?:\/|$)/i.test(root.location?.pathname ?? "");
+      const existingBadge = root.document?.getElementById("chzzk-clean-chat-latency");
+
+      if (!isLive || !CLEAN_SETTINGS.chatLatencyDisplay) {
+        if (existingBadge) existingBadge.remove();
+        return;
+      }
+
+      // 채팅 입력창 컨테이너 탐색
+      const inputContainer =
+        root.document?.querySelector('[class*="live_chatting_input_container"]') ||
+        root.document?.querySelector('[class*="chatting_input_area"]') ||
+        root.document?.querySelector('[class*="live_chatting_input_box"]') ||
+        root.document?.querySelector('form:has(textarea[placeholder*="채팅"])') ||
+        root.document?.querySelector('div:has(> textarea[placeholder*="채팅"])') ||
+        root.document?.querySelector('div:has(> [contenteditable="true"])') ||
+        root.document?.querySelector('[class*="live_chatting_input"]');
+
+      if (!inputContainer) return;
+
+      if (root.getComputedStyle(inputContainer).position === "static") {
+        inputContainer.style.position = "relative";
+      }
+
+      let badge = existingBadge;
+      if (!badge) {
+        badge = root.document.createElement("div");
+        badge.id = "chzzk-clean-chat-latency";
+        badge.style.cssText = `
+          position: absolute;
+          top: -22px;
+          right: 4px;
+          font-size: 11px;
+          font-weight: 600;
+          color: rgba(255, 255, 255, 0.5);
+          background: rgba(0, 0, 0, 0.45);
+          padding: 2px 7px;
+          border-radius: 4px;
+          user-select: none;
+          pointer-events: none;
+          white-space: nowrap;
+          letter-spacing: -0.02em;
+          z-index: 10;
+          backdrop-filter: blur(4px);
+          transition: color 0.2s ease;
+        `;
+        inputContainer.appendChild(badge);
+      }
+
+      const video = root.document?.querySelector("video");
+      if (!video || !video.isConnected) {
+        badge.textContent = "지연: 대기 중...";
+        badge.style.color = "rgba(255, 255, 255, 0.4)";
+        return;
+      }
+      if (video.paused) {
+        badge.textContent = "지연: 일시정지됨";
+        badge.style.color = "rgba(255, 255, 255, 0.4)";
+        return;
+      }
+
+      const metrics = measureLiveMetrics(video);
+      const latency = metrics.latency;
+      const buffer = metrics.buffer;
+
+      if (latency >= 0) {
+        badge.textContent = `지연: ${latency.toFixed(2)}s (버퍼 ${buffer.toFixed(1)}s)`;
+        if (latency < 2.5) {
+          badge.style.color = "#00ffa3"; // 양호 (민트)
+        } else if (latency < 4.0) {
+          badge.style.color = "#ffb800"; // 보통 (노랑)
+        } else {
+          badge.style.color = "#ff5555"; // 지연 심함 (빨강)
+        }
+      } else {
+        badge.textContent = "지연: 측정 중...";
+        badge.style.color = "rgba(255, 255, 255, 0.4)";
+      }
     };
 
-    root.addEventListener("popstate", onRouteOrStateChange);
+    root.setInterval(updateLatencyBadge, 500);
   }
 
   // [ChzzkClean] 채팅 입력창 실시간 지연시간/버퍼 표시 엔진
