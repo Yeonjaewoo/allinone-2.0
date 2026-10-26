@@ -15,6 +15,9 @@
           "data-chzzk-clean-settings",
           JSON.stringify(settings)
         );
+        document.documentElement.dispatchEvent(
+          new CustomEvent("chzzk-clean-settings-changed", { detail: settings })
+        );
       }
     } catch (e) {
       console.warn("[ChzzkClean] 설정 동기화 중 오류:", e);

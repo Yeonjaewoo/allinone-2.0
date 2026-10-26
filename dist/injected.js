@@ -113,19 +113,32 @@
     }
   } catch (e) {}
 
+  const onSettingsUpdatedHandler = (newSettings) => {
+    if (!newSettings) return;
+    Object.assign(CLEAN_SETTINGS, newSettings);
+    try {
+      root.localStorage?.setItem("chzzk_clean_settings", JSON.stringify(CLEAN_SETTINGS));
+    } catch (err) {}
+    console.info(`${PREFIX} [ChzzkClean] 설정 실시간 동기화 완료:`, CLEAN_SETTINGS);
+    const style = document.getElementById("chzzk-p2p-bypass-style");
+    if (style) {
+      style.disabled = !CLEAN_SETTINGS.autoDismissPopup;
+    }
+    // [핵심] 팝업에서 설정 변경 시 새로고침 없이 즉시 비디오 파이프라인에 재적용!
+    if (typeof applySettingsImmediately === "function") {
+      applySettingsImmediately();
+    }
+  };
+
   root.addEventListener("message", (e) => {
     if (e.data?.source === "CHZZK_CLEAN_EXT" && e.data?.type === "SETTINGS_UPDATED") {
-      if (e.data.settings) {
-        Object.assign(CLEAN_SETTINGS, e.data.settings);
-        try {
-          root.localStorage?.setItem("chzzk_clean_settings", JSON.stringify(CLEAN_SETTINGS));
-        } catch (err) {}
-        console.info(`${PREFIX} [ChzzkClean] 토글 설정 동기화 완료:`, CLEAN_SETTINGS);
-        const style = document.getElementById("chzzk-p2p-bypass-style");
-        if (style) {
-          style.disabled = !CLEAN_SETTINGS.autoDismissPopup;
-        }
-      }
+      onSettingsUpdatedHandler(e.data.settings);
+    }
+  });
+
+  root.document?.documentElement?.addEventListener("chzzk-clean-settings-changed", (e) => {
+    if (e.detail) {
+      onSettingsUpdatedHandler(e.detail);
     }
   });
 
@@ -2444,6 +2457,21 @@
   // [ChzzkClean] 저지연 모드 엔진 (v2.0.7 기반 안정화 + 스마트 라이브 싱크)
   // ========================================================
   let smoothedLatency = null;
+  let syncNativeLowLatencyFn = null;
+  let traceLiveLatencyFn = null;
+  let updateLatencyBadgeFn = null;
+
+  function applySettingsImmediately() {
+    if (typeof syncNativeLowLatencyFn === "function") {
+      syncNativeLowLatencyFn(true);
+    }
+    if (typeof traceLiveLatencyFn === "function") {
+      traceLiveLatencyFn();
+    }
+    if (typeof updateLatencyBadgeFn === "function") {
+      updateLatencyBadgeFn();
+    }
+  }
 
   function installLowLatencyEngine() {
     let lastAppliedState = null;
@@ -2472,12 +2500,12 @@
       } catch (e) {}
     };
 
-    const syncNativeLowLatency = () => {
+    const syncNativeLowLatency = (force = false) => {
       const isLive = /^\/live\/[a-f0-9]{32}(?:\/|$)/i.test(root.location?.pathname ?? "");
       if (!isLive) return;
 
       const targetState = !!CLEAN_SETTINGS.lowLatencyMode;
-      if (lastAppliedState === targetState) return;
+      if (!force && lastAppliedState === targetState) return;
 
       try {
         const store = getPlayerStore();
@@ -2491,6 +2519,7 @@
         }
       } catch (e) {}
     };
+    syncNativeLowLatencyFn = syncNativeLowLatency;
 
     // 실시간 버퍼 지연 추적 및 복구 (v2.0.7 기반 개선)
     const traceLiveLatency = () => {
@@ -2516,7 +2545,7 @@
           const liveEnd = video.seekable.end(video.seekable.length - 1);
           const rawLatency = Math.max(0, liveEnd - video.currentTime);
 
-          // 전방 버퍼(Forward Buffer) 길이 계산
+          // 전방 버퍼(Forward Buffer) 길이 정밀 계산
           let forwardBuffer = 0;
           if (video.buffered && video.buffered.length > 0) {
             for (let i = 0; i < video.buffered.length; i++) {
@@ -2531,53 +2560,49 @@
             const target = typeof CLEAN_SETTINGS.targetLatency === "number" ? CLEAN_SETTINGS.targetLatency : 2.0;
             const diff = rawLatency - target;
 
-            // 1) [방송 진입 초기 1회 라이브 싱크]
-            // 비디오 로드 극초반(첫 프레임 준비 시점)에 딱 1회 라이브 엣지로 즉시 안착시켜
-            // 치지직 기본 15초 버퍼에서 시작하지 않고 처음부터 실시간(2초대)에서 재생 시작
+            // 1) [문제 1 해결: 방송 진입 초기 라이브 싱크]
+            // 비디오 로드 극초반(0.1초~0.3초)에 딱 1회 라이브 엣지로 즉시 안착시켜
+            // 과거 15초/30초 버퍼에 머무르지 않고 처음부터 실시간(목표 지연시간) 위치에서 재생 시작
             if (!initialSyncedVideos.has(video) && video.readyState >= 2) {
               initialSyncedVideos.add(video);
               triggerGoLive();
               if (liveEnd > target && Math.abs(liveEnd - target - video.currentTime) > 3.0) {
                 video.currentTime = Math.max(0, liveEnd - target);
-                console.info(`${PREFIX} [ChzzkClean] 초기 라이브 싱크 안착 (목표: ${target}s)`);
               }
               continue;
             }
 
-            // 2) [심각한 지연 누적(8.0초 이상) 복구]
-            // 지연이 15초 등으로 크게 벌어져 있을 때 목표 위치로 안전하게 당김 (쿨다운 8초)
+            // 2) [심각한 지연 누적(10초 이상) 복구]
+            // 장시간 일시정지 등으로 10초 이상 벌어졌을 때만 안전 싱크 점프 (쿨다운 12초)
             const jumpCooldownElapsed = (now - lastJumpTime) / 1000;
-            if (diff > 8.0 && jumpCooldownElapsed > 8.0 && liveEnd > target) {
+            if (diff > 10.0 && jumpCooldownElapsed > 12.0 && liveEnd > target + 2.0) {
               lastJumpTime = now;
               triggerGoLive();
               video.currentTime = Math.max(0, liveEnd - target);
-              console.info(`${PREFIX} [ChzzkClean] 큰 지연 누적 감지(${rawLatency.toFixed(1)}s) -> 목표 위치(${target}s)로 싱크 점프`);
+              console.info(`${PREFIX} [ChzzkClean] 큰 지연 누적 복구 -> 목표 위치(${target}s)로 싱크`);
               continue;
             }
 
-            // 3) [정밀 비례 배속 제어 (들쭉날쭉 요동 방지)]
-            // A. 안정 데드존 (목표치 ±0.5s 이내, 예: 1.5s ~ 2.5s): 정상 1.00배속 유지!
-            if (Math.abs(diff) <= 0.5) {
+            // 3) [문제 2 해결: 0.2초 당겨짐 및 방송 로딩 완벽 방어 안전 가드]
+            // ★ 핵심 가드 1: 전방 버퍼가 1.5초 이하로 줄어들거나, 지연시간이 1.3초 이하로 너무 바짝 붙으면:
+            // 무조건 0.95배속으로 감속하여 안전 버퍼(2.0초 이상)를 최우선 확보! (버퍼 고갈 버퍼링 원천 차단)
+            if (rawLatency < 1.3 || forwardBuffer < 1.4) {
+              if (video.playbackRate !== 0.95) video.playbackRate = 0.95;
+            }
+            // ★ 핵심 가드 2: 목표치 안정 데드존 (target ± 0.4s, 예: 1.6s ~ 2.4s): 정상 1.00배속 유지 (가속 절대 금지!)
+            else if (Math.abs(diff) <= 0.4) {
               if (video.playbackRate !== 1.0) video.playbackRate = 1.0;
             }
-            // B. 버퍼 부족 시(1.0s 미만): 버퍼링 방지를 위해 즉시 1.0배속 또는 0.97배속으로 충전
-            else if (forwardBuffer < 1.0) {
-              if (video.playbackRate > 1.0) video.playbackRate = 1.0;
-              else if (diff < 0 && video.playbackRate !== 0.97) video.playbackRate = 0.97;
-            }
-            // C. 중간 지연(2.5s ~ 8.0s 뒤처짐) & 버퍼 여유 충분 시: 1.08배속으로 자연스럽게 당김
-            else if (diff > 2.5 && forwardBuffer >= 1.5) {
-              if (video.playbackRate !== 1.08) video.playbackRate = 1.08;
-            }
-            // D. 미세 지연(0.5s ~ 2.5s 뒤처짐) & 버퍼 충분 시: 1.03배속으로 부드럽게 좁힘
-            else if (diff > 0.5 && forwardBuffer >= 1.2) {
+            // ★ 핵심 가드 3: 목표치보다 뒤처졌을 때(diff > 0.4s) & 전방 버퍼가 충분할 때(>= 1.8s):
+            // 버퍼를 급격히 갉아먹지 않도록 1.03배속(3% 가속)까지만 부드럽게 허용!
+            else if (diff > 0.4 && forwardBuffer >= 1.8) {
               if (video.playbackRate !== 1.03) video.playbackRate = 1.03;
             }
-            // E. 너무 바짝 붙었을 때(목표치보다 0.5초 이상 앞섬): 0.97배속으로 살짝 늦춰 버퍼 확보
-            else if (diff < -0.5 && forwardBuffer < 1.8) {
+            // ★ 핵심 가드 4: 목표치보다 앞서있을 때(diff < -0.4s): 0.97배속으로 감속하여 목표치로 복귀
+            else if (diff < -0.4) {
               if (video.playbackRate !== 0.97) video.playbackRate = 0.97;
             }
-            // F. 기본 정상 배속
+            // 기본 정상 배속
             else {
               if (video.playbackRate !== 1.0) video.playbackRate = 1.0;
             }
@@ -2588,6 +2613,7 @@
         }
       }
     };
+    traceLiveLatencyFn = traceLiveLatency;
 
     root.setInterval(() => {
       syncNativeLowLatency();
@@ -2667,6 +2693,14 @@
         return;
       }
 
+      // [문제 1 해결: 초기 30초 노출 방지 마스킹]
+      // 비디오가 아직 로딩 중이거나 첫 재생 프레임에 도달하지 않은 초기에는 30초 대신 "실시간 연결 중..."으로 마스킹
+      if (video.readyState < 3 || video.currentTime < 0.5 || video.seeking) {
+        badge.textContent = "지연: 실시간 연결 중...";
+        badge.style.color = "rgba(255, 255, 255, 0.5)";
+        return;
+      }
+
       let rawLatency = -1;
       let buffer = 0;
 
@@ -2686,7 +2720,7 @@
         }
       }
 
-      if (rawLatency >= 0) {
+      if (rawLatency >= 0 && rawLatency < 60) {
         // HLS 청크 도착에 따른 미세 진동 스무딩 필터
         if (smoothedLatency === null || Math.abs(rawLatency - smoothedLatency) > 3.0) {
           smoothedLatency = rawLatency;
@@ -2708,6 +2742,7 @@
         badge.style.color = "rgba(255, 255, 255, 0.4)";
       }
     };
+    updateLatencyBadgeFn = updateLatencyBadge;
 
     root.setInterval(updateLatencyBadge, 500);
   }

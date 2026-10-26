@@ -62,9 +62,10 @@ document.addEventListener("DOMContentLoaded", () => {
   const notifyTabs = (settings: UserSettings) => {
     if (!chrome.tabs) return;
 
-    chrome.tabs.query({ url: ["*://chzzk.naver.com/*", "*://*.chzzk.naver.com/*"] }, (tabs) => {
+    // 치지직 URL을 포함하는 모든 탭을 탐색하여 즉시 메시지 전달
+    chrome.tabs.query({}, (tabs) => {
       tabs.forEach((tab) => {
-        if (tab.id) {
+        if (tab.id && tab.url && (tab.url.includes("chzzk.naver.com") || tab.url.includes("m.naver.com/shorts"))) {
           chrome.tabs.sendMessage(tab.id, {
             source: "CHZZK_CLEAN_EXT",
             type: "SETTINGS_UPDATED",

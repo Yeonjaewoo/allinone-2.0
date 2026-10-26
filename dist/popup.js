@@ -87,9 +87,9 @@ document.addEventListener("DOMContentLoaded", () => {
   });
   const notifyTabs = (settings) => {
     if (!chrome.tabs) return;
-    chrome.tabs.query({ url: ["*://chzzk.naver.com/*", "*://*.chzzk.naver.com/*"] }, (tabs) => {
+    chrome.tabs.query({}, (tabs) => {
       tabs.forEach((tab) => {
-        if (tab.id) {
+        if (tab.id && tab.url && (tab.url.includes("chzzk.naver.com") || tab.url.includes("m.naver.com/shorts"))) {
           chrome.tabs.sendMessage(tab.id, {
             source: "CHZZK_CLEAN_EXT",
             type: "SETTINGS_UPDATED",

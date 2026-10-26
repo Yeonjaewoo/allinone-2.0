@@ -16,11 +16,14 @@
         "*"
       );
 
-      // 2. DOM attribute에 동기적 기록
+      // 2. DOM attribute에 동기적 기록 및 커스텀 이벤트 디스패치
       if (document.documentElement) {
         document.documentElement.setAttribute(
           "data-chzzk-clean-settings",
           JSON.stringify(settings)
+        );
+        document.documentElement.dispatchEvent(
+          new CustomEvent("chzzk-clean-settings-changed", { detail: settings })
         );
       }
     } catch (e) {
